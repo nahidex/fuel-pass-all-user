@@ -1,0 +1,5 @@
+{
+  "name": "Fuel Pass Bangladesh",
+  "description": "A digital fuel partner app for secure and digital fuel management in Bangladesh.",
+  "requestFramePermissions": ["camera"]
+}

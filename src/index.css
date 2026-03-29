@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Noto Serif Bengali", serif;
+  --font-headline: "Noto Serif Bengali", serif;
+  --font-body: "Noto Serif Bengali", serif;
+  --font-label: "Noto Serif Bengali", serif;
+
+  --color-primary: #00503a;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #006a4e;
+  --color-on-primary-container: #ffffff;
+  --color-secondary: #50606f;
+  --color-background: #f9f9f9;
+  --color-surface: #f9f9f9;
+  --color-on-surface: #1a1c1c;
+  --color-surface-container: #eeeeee;
+  --color-surface-container-low: #f3f3f3;
+  --color-surface-container-lowest: #ffffff;
+  --color-outline-variant: #bec9c2;
+  --color-secondary-container: #d1e1f4;
+  --color-on-secondary-container: #556474;
+  --color-primary-fixed: #9ef4d0;
+  --color-on-primary-fixed: #002116;
+}
+
+body {
+  font-family: 'Noto Serif Bengali', serif;
+  background-color: #f9f9f9;
+  color: #1a1c1c;
+}
+
+.fuel-gradient {
+  background: linear-gradient(45deg, #00503a, #006a4e);
+}
+
+.editorial-shadow {
+  box-shadow: 0 16px 32px -4px rgba(0, 33, 22, 0.04);
+}

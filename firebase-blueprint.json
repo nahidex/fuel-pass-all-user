@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "nid": { "type": "string" },
+        "vehicleType": { "type": "string" },
+        "plateNumber": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "operator", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "role"]
+    },
+    "Pump": {
+      "title": "Pump",
+      "description": "Fuel pump information and location",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "status": { "type": "string", "enum": ["open", "busy", "closed"] },
+        "octane": { "type": "boolean" },
+        "diesel": { "type": "boolean" },
+        "petrol": { "type": "boolean" },
+        "operatorId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "lat", "lng", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/pumps/{pumpId}": {
+      "schema": "Pump",
+      "description": "Fuel pump documents"
+    }
+  }
+}
