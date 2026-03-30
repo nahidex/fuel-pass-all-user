@@ -1,21 +1,75 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Fuel Pass Bangladesh
 
-# Run and deploy your AI Studio app
+Fuel Pass Bangladesh is a comprehensive system designed to manage and monitor fuel distribution across the country. This repository contains the source code for the server, web client, and mobile application.
 
-This contains everything you need to run your app locally.
+## Project Structure
 
-View your app in AI Studio: https://ai.studio/apps/8dbcb7b1-9d92-49b8-a98a-7b890d3e3686
+- **server/**: Express.js backend with MySQL database.
+- **client/**: React (Vite) web dashboard for users and administrators.
+- **mobile/**: Expo (React Native) mobile application for vehicle owners.
 
-## Run Locally
+## Getting Started
 
-**Prerequisites:**  Node.js
+### Prerequisites
 
+- [Node.js](https://nodejs.org/) (v18 or higher)
+- [MySQL](https://www.mysql.com/) database
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
-# fuel-pass-all-user
+### Running the Server
+
+1. Navigate to the server directory:
+   ```bash
+   cd server
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Set up your environment variables in a `.env` file.
+4. Run migrations and seed the database:
+   ```bash
+   npx tsx migrate_db.ts
+   npx tsx seed.ts
+   ```
+5. Start the server:
+   ```bash
+   npm run dev
+   ```
+
+### Running the Web Client
+
+1. Navigate to the client directory:
+   ```bash
+   cd client
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the Vite development server:
+   ```bash
+   npm run dev
+   ```
+
+### Running the Mobile App
+
+1. Navigate to the mobile directory:
+   ```bash
+   cd mobile
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the Expo project:
+   ```bash
+   npm start
+   ```
+
+## Features
+
+- **Dynamic QR Code**: Secure vehicle identification with 1-minute auto-refreshing JWT tokens.
+- **Quota Management**: Real-time tracking of weekly fuel limits.
+- **Dashboard**: Visual tracking of fuel consumption and history.
+- **Multi-role Access**: Separate dashboards for Owners, Operators, and Distributors.
+

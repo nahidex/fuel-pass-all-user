@@ -367,56 +367,39 @@ export default function App() {
     }
   };
 
-  const pumps = [
-    {
-      id: 1,
-      name: "পদ্মা ফিলিং স্টেশন",
-      location: "কারওয়ান বাজার, ঢাকা",
-      distance: "০.৮ কিমি",
-      status: "খোলা",
-      octane: "আছে",
-      diesel: "আছে",
-      petrol: "নাই",
-      lat: 40,
-      lng: 30,
-    },
-    {
-      id: 2,
-      name: "মেঘনা পেট্রোলিয়াম",
-      location: "উত্তরা সেক্টর-৪, ঢাকা",
-      distance: "১.৫ কিমি",
-      status: "খোলা",
-      octane: "আছে",
-      diesel: "আছে",
-      petrol: "আছে",
-      lat: 60,
-      lng: 50,
-    },
-    {
-      id: 3,
-      name: "যমুনা অয়েল লিমিটেড",
-      location: "বনানী, ঢাকা",
-      distance: "২.২ কিমি",
-      status: "ভিড় বেশি",
-      octane: "নাই",
-      diesel: "আছে",
-      petrol: "আছে",
-      lat: 25,
-      lng: 70,
-    },
-    {
-      id: 4,
-      name: "ট্রাস্ট ফিলিং স্টেশন",
-      location: "সাভার, ঢাকা",
-      distance: "৪.৫ কিমি",
-      status: "বন্ধ",
-      octane: "নাই",
-      diesel: "নাই",
-      petrol: "নাই",
-      lat: 75,
-      lng: 20,
-    },
-  ];
+  const [pumps, setPumps] = useState<any[]>([]);
+
+  const fetchPumps = async () => {
+    try {
+      const response = await fetch("/api/pumps");
+      const data = await response.json();
+      if (data.success) {
+        // Map database fields to UI fields
+        const mappedPumps = data.pumps.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          location: p.location,
+          distance: "N/A",
+          status: p.status === "active" ? "খোলা" : "বন্ধ",
+          octane: p.octane_liters > 0 ? "আছে" : "নাই",
+          diesel: p.diesel_liters > 0 ? "আছে" : "নাই",
+          petrol: p.petrol_liters > 0 ? "আছে" : "নাই",
+          // Map real lat/long to simulated % for display (rough scaling)
+          lat: (23.95 - parseFloat(p.latitude)) * 500 + 10,
+          lng: (parseFloat(p.longitude) - 90.3) * 500 + 10,
+        }));
+        setPumps(mappedPumps);
+      }
+    } catch (error) {
+      console.error("Error fetching pumps:", error);
+    }
+  };
+
+  React.useEffect(() => {
+    if (screen === "map") {
+      fetchPumps();
+    }
+  }, [screen]);
 
   const transactions = [
     {
