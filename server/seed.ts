@@ -1,6 +1,7 @@
 import mysql from "mysql2/promise";
 import bcrypt from "bcryptjs";
 import * as dotenv from "dotenv";
+import { v4 as uuidv4 } from "uuid";
 
 dotenv.config();
 
@@ -149,8 +150,8 @@ async function seed() {
 
     for (const v of vehicles) {
       const [vResult]: any = await pool.execute(
-        "INSERT INTO vehicles (user_id, reg_number, type, fuel_type, model, color, engine_number, district, series) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        v,
+        "INSERT INTO vehicles (user_id, reg_number, type, fuel_type, model, color, engine_number, district, series, uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [...v, uuidv4()],
       );
       await pool.execute(
         "INSERT INTO quotas (vehicle_id, weekly_limit_liters) VALUES (?, ?)",
@@ -160,16 +161,60 @@ async function seed() {
 
     console.log("Seeding Pumps & Inventories...");
     const pumps = [
-      ["পদ্মা ফিলিং স্টেশন", "কারওয়ান বাজার, ঢাকা", owner1.id, "active"],
-      ["মেঘনা পেট্রোলিয়াম", "উত্তরা, ঢাকা", owner1.id, "active"],
-      ["যমুনা ফিলিং সেন্টার", "মতিঝিল, ঢাকা", owner1.id, "active"],
-      ["শাপলা ফুয়েলস", "চট্টগ্রাম পোর্ট", owner2.id, "active"],
-      ["সোনারগাঁও স্টেশন", "সাভার, ঢাকা", owner2.id, "active"],
+      [
+        "পদ্মা ফিলিং স্টেশন",
+        "কারওয়ান বাজার, ঢাকা",
+        23.7512,
+        90.3934,
+        owner1.id,
+        "active",
+      ],
+      [
+        "মেঘনা পেট্রোলিয়াম",
+        "উত্তরা, ঢাকা",
+        23.8759,
+        90.3795,
+        owner1.id,
+        "active",
+      ],
+      [
+        "যমুনা ফিলিং সেন্টার",
+        "মতিঝিল, ঢাকা",
+        23.733,
+        90.4172,
+        owner1.id,
+        "active",
+      ],
+      ["শাপলা ফুয়েলস", "চট্টগ্রাম পোর্ট", 22.3167, 91.8, owner2.id, "active"],
+      [
+        "সোনারগাঁও স্টেশন",
+        "সাভার, ঢাকা",
+        23.8583,
+        90.2667,
+        owner2.id,
+        "active",
+      ],
+      [
+        "বিপিসি ফিলিং স্টেশন",
+        "বনানী, ঢাকা",
+        23.8103,
+        90.4125,
+        owner1.id,
+        "active",
+      ],
+      [
+        "ট্রাস্ট ফিলিং স্টেশন",
+        "মিরপুর, ঢাকা",
+        23.8203,
+        90.4225,
+        owner1.id,
+        "active",
+      ],
     ];
 
     for (const p of pumps) {
       const [pResult]: any = await pool.execute(
-        "INSERT INTO pumps (name, location, owner_id, status) VALUES (?, ?, ?, ?)",
+        "INSERT INTO pumps (name, location, latitude, longitude, owner_id, status) VALUES (?, ?, ?, ?, ?, ?)",
         p,
       );
       await pool.execute(

@@ -48,7 +48,9 @@ const initializeMySQL = async () => {
         district VARCHAR(100),
         series VARCHAR(100),
         number VARCHAR(100),
+        reg_number VARCHAR(100),
         type VARCHAR(50),
+        fuel_type VARCHAR(50),
         model VARCHAR(100),
         color VARCHAR(50),
         engine_number VARCHAR(100),
@@ -523,6 +525,80 @@ async function startServer() {
         },
       });
     } catch (error) {
+      res.status(401).json({ success: false, error: "অবৈধ টোকেন" });
+    }
+  });
+
+  // API to get all pumps with inventory
+  app.get("/api/pumps", async (req, res) => {
+    try {
+      if (mysqlPool) {
+        const [rows]: any = await mysqlPool.execute(`
+          SELECT p.*, i.octane_liters, i.diesel_liters, i.petrol_liters 
+          FROM pumps p
+          LEFT JOIN inventories i ON p.id = i.pump_id
+          WHERE p.status = 'active'
+        `);
+        res.json({ success: true, pumps: rows });
+      } else {
+        res
+          .status(500)
+          .json({ success: false, error: "Database not connected" });
+      }
+    } catch (error) {
+      console.error("Error fetching pumps:", error);
+      res.status(500).json({ success: false, error: "সার্ভার ত্রুটি" });
+    }
+  });
+
+  // API to get vehicle QR data as encrypted JWT
+  app.get("/api/vehicle-qr", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ success: false, error: "টোকেন নেই" });
+    }
+
+    const token = authHeader.split(" ")[1];
+    try {
+      const decoded: any = jwt.verify(
+        token,
+        process.env.JWT_SECRET || "secret",
+      );
+
+      let vehicle: any = null;
+      if (mysqlPool) {
+        const [rows]: any = await mysqlPool.execute(
+          "SELECT uuid, reg_number FROM vehicles WHERE user_id = ?",
+          [decoded.userId],
+        );
+        vehicle = rows[0];
+      }
+
+      if (!vehicle) {
+        return res
+          .status(404)
+          .json({ success: false, error: "যানবাহন পাওয়া যায়নি" });
+      }
+
+      // Hardcoded timestamps as requested: 1 minute duration
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        uuid: vehicle.uuid,
+        reg_number: vehicle.reg_number,
+        iat: now,
+        exp: now + 60, // 1 minute expiry
+      };
+
+      // Sign the payload. Note: jwt.sign adds iat by default unless we handle it.
+      // Since specific iat/exp are requested, we'll sign the object as is.
+      const qrToken = jwt.sign(payload, process.env.JWT_SECRET || "secret");
+
+      res.json({
+        success: true,
+        qrToken,
+      });
+    } catch (error) {
+      console.error("QR data error:", error);
       res.status(401).json({ success: false, error: "অবৈধ টোকেন" });
     }
   });
