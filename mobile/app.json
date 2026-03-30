@@ -13,7 +13,12 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "The app needs camera access to take vehicle photos and scan QR codes.",
+        "NSPhotoLibraryUsageDescription": "The app needs photo library access to upload vehicle images.",
+        "NSMicrophoneUsageDescription": "The app needs microphone access for camera use."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -33,7 +38,13 @@
     },
     "plugins": [
       "expo-font",
-      "expo-barcode-scanner",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The app needs camera access to take vehicle photos and scan QR codes.",
+          "microphonePermission": false
+        }
+      ],
       [
         "expo-image-picker",
         {

@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import multer from "multer";
 import fs from "fs";
 import cors from "cors";
+import { randomUUID } from "crypto";
 
 dotenv.config();
 
@@ -25,6 +26,8 @@ const mysqlPool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
 });
 
 const initializeMySQL = async () => {
@@ -142,20 +145,9 @@ const initializeMySQL = async () => {
 
         if (u.role === "owner") {
           await mysqlPool.execute(
-            `
-            INSERT INTO vehicles (user_id, district, series, number, type, model, color, engine_number)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `,
-            [
-              userId,
-              u.district,
-              u.series,
-              u.number,
-              u.type,
-              u.model,
-              u.color,
-              u.engine,
-            ],
+            `INSERT INTO vehicles (user_id, district, series, number, type, model, color, engine_number, uuid)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [userId, u.district, u.series, u.number, u.type, u.model, u.color, u.engine, randomUUID()],
           );
         }
         console.log(`MySQL: Seeded dummy user (${u.role}) for ${u.name}`);
@@ -237,55 +229,45 @@ async function startServer() {
       const hashedPassword = await bcrypt.hash(password, 10);
 
       if (mysqlPool) {
-        // MySQL Registration
-        const connection = await mysqlPool.getConnection();
-        try {
-          await connection.beginTransaction();
-          const [userResult] = (await connection.execute(
-            `INSERT INTO users (full_name, mobile_number, email, password, role) VALUES (?, ?, ?, ?, 'owner')`,
-            [fullName, mobileNumber, email, hashedPassword],
-          )) as any;
-          const userId = userResult.insertId;
-
-          const [vResult]: any = await connection.execute(
-            `INSERT INTO vehicles (user_id, district, series, number, reg_number, type, fuel_type, model, color, engine_number) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              userId,
-              district,
-              series,
-              number,
-              `${district}-${series}-${number}`,
-              type,
-              type === "bike" ? "petrol" : "octane", // Default fuel type based on vehicle type
-              model,
-              color,
-              engineNumber,
-            ],
-          );
-
-          // Create default quota for new vehicle (30L weekly)
-          await connection.execute(
-            "INSERT INTO quotas (vehicle_id, weekly_limit_liters) VALUES (?, ?)",
-            [
-              vResult.insertId,
-              type === "truck" ? 100 : type === "car" ? 40 : 15,
-            ],
-          );
-
-          await connection.commit();
-          const token = jwt.sign(
-            { userId, mobileNumber },
-            process.env.JWT_SECRET || "secret",
-            { expiresIn: "7d" },
-          );
-          res.json({ success: true, id: userId, token });
-        } catch (err) {
-          await connection.rollback();
-          throw err;
-        } finally {
-          connection.release();
+        // Check for duplicate mobile number first
+        const [existing]: any = await mysqlPool.execute(
+          "SELECT id FROM users WHERE mobile_number = ?",
+          [mobileNumber],
+        );
+        if (existing.length > 0) {
+          return res.status(400).json({ success: false, error: "এই মোবাইল নম্বরটি ইতিমধ্যে নিবন্ধিত" });
         }
+
+        const [userResult]: any = await mysqlPool.execute(
+          `INSERT INTO users (full_name, mobile_number, email, password, role) VALUES (?, ?, ?, ?, 'owner')`,
+          [fullName, mobileNumber, email, hashedPassword],
+        );
+        const userId = userResult.insertId;
+
+        await mysqlPool.execute(
+          `INSERT INTO vehicles (user_id, district, series, number, reg_number, type, fuel_type, model, color, engine_number, uuid)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            userId,
+            district,
+            series,
+            number,
+            `${district}-${series}-${number}`,
+            type,
+            type === "bike" ? "petrol" : "octane",
+            model,
+            color,
+            engineNumber,
+            randomUUID(),
+          ],
+        );
+
+        const token = jwt.sign(
+          { userId, mobileNumber },
+          process.env.JWT_SECRET || "secret",
+          { expiresIn: "7d" },
+        );
+        res.json({ success: true, id: userId, token });
       } else {
         throw new Error("MySQL not initialized");
       }
@@ -603,11 +585,59 @@ async function startServer() {
     }
   });
 
-  // API to verify QR token (Operator side)
+  // API to record a fuel transaction after operator confirms
+  app.post("/api/record-transaction", async (req, res) => {
+    const { vehicleUuid, amountLiters, fuelType, paymentMethod } = req.body;
+    if (!vehicleUuid || !amountLiters || !fuelType) {
+      return res.status(400).json({ success: false, error: "প্রয়োজনীয় তথ্য নেই" });
+    }
+    try {
+      if (!mysqlPool) {
+        return res.status(500).json({ success: false, error: "ডেটাবেস সংযোগ নেই" });
+      }
+      const [vRows]: any = await mysqlPool.execute(
+        "SELECT id, user_id FROM vehicles WHERE uuid = ?",
+        [vehicleUuid],
+      );
+      if (!vRows.length) {
+        return res.status(404).json({ success: false, error: "যানবাহন পাওয়া যায়নি" });
+      }
+      const vehicle = vRows[0];
+      const fuelPriceMap: Record<string, number> = { octane: 135, petrol: 130, diesel: 106, cng: 43 };
+      const pricePerLiter = fuelPriceMap[fuelType.toLowerCase()] ?? 135;
+      const liters = parseFloat(amountLiters);
+      const totalPrice = Math.round(liters * pricePerLiter * 100) / 100;
+      const [result]: any = await mysqlPool.execute(
+        `INSERT INTO fuel_usages (user_id, vehicle_id, amount_liters, price_total, fuel_type, pump_name, payment_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [vehicle.user_id, vehicle.id, liters, totalPrice, fuelType, "অপারেটর কর্তৃক প্রদত্ত", paymentMethod || "cash"],
+      );
+      const txId = `FP${String(result.insertId).padStart(6, "0")}`;
+      res.json({
+        success: true,
+        transaction: {
+          id: txId,
+          vehicleUuid,
+          amountLiters: liters,
+          fuelType,
+          pricePerLiter,
+          totalPrice,
+          paymentMethod: paymentMethod || "cash",
+          createdAt: new Date().toISOString(),
+        },
+      });
+    } catch (error: any) {
+      console.error("Record transaction error:", error.message);
+      res.status(500).json({ success: false, error: "ট্রানজেকশন সংরক্ষণ ব্যর্থ" });
+    }
+  });
+
+  // API to verify scanned QR token (Operator side)
   app.post("/api/verify-qr", async (req, res) => {
     const { qrToken } = req.body;
-    if (!qrToken)
-      return res.status(400).json({ success: false, error: "কিউআর টোকেন নেই" });
+    if (!qrToken) {
+      return res.status(400).json({ success: false, error: "QR টোকেন নেই" });
+    }
 
     try {
       const decoded: any = jwt.verify(
@@ -615,45 +645,75 @@ async function startServer() {
         process.env.JWT_SECRET || "secret",
       );
 
-      if (mysqlPool) {
-        const [rows]: any = await mysqlPool.execute(
-          `
-          SELECT v.*, u.full_name, u.mobile_number 
-          FROM vehicles v 
-          JOIN users u ON v.user_id = u.id 
-          WHERE v.reg_number = ?
-        `,
-          [decoded.reg_number],
-        );
-
-        if (rows.length === 0) {
-          return res
-            .status(404)
-            .json({ success: true, error: "যানবাহন পাওয়া যায়নি" });
-        }
-
-        const vehicle = rows[0];
-        res.json({
-          success: true,
-          data: {
-            regNumber: vehicle.reg_number,
-            ownerName: vehicle.full_name,
-            fuelType: vehicle.fuel_type || "অকটেন",
-            status: "সফল",
-            remainingQuota: 25.5, // Dummy for now
-          },
-        });
-      } else {
-        res.status(500).json({ success: false, error: "ডেটাবেস সংযুক্ত নয়" });
+      if (!mysqlPool) {
+        return res.status(500).json({ success: false, error: "ডেটাবেস সংযোগ নেই" });
       }
+
+      // Fetch vehicle + user info using uuid from QR
+      const [vehicleRows]: any = await mysqlPool.execute(
+        `SELECT v.uuid, v.reg_number, v.type AS vehicle_type, v.fuel_type,
+                v.car_image_url, v.plate_image_url, v.bluebook_image_url,
+                u.full_name, u.mobile_number AS mobile
+         FROM vehicles v
+         JOIN users u ON v.user_id = u.id
+         WHERE v.uuid = ?`,
+        [decoded.uuid],
+      );
+
+      if (!vehicleRows.length) {
+        return res.status(404).json({ success: false, error: "যানবাহন পাওয়া যায়নি" });
+      }
+
+      const vehicle = vehicleRows[0];
+
+      // Fetch current month quota usage via vehicle_id
+      const now = new Date();
+      const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const [usageRows]: any = await mysqlPool.execute(
+        `SELECT COALESCE(SUM(fu.amount_liters), 0) AS used
+         FROM fuel_usages fu
+         JOIN vehicles veh ON fu.vehicle_id = veh.id
+         WHERE veh.uuid = ? AND DATE_FORMAT(fu.created_at, '%Y-%m') = ?`,
+        [decoded.uuid, month],
+      );
+
+      const used = parseFloat(usageRows[0]?.used || "0");
+      const quotaMap: Record<string, number> = {
+        octane: 60,
+        petrol: 60,
+        diesel: 120,
+        cng: 90,
+      };
+      const totalQuota = quotaMap[vehicle.fuel_type?.toLowerCase()] ?? 60;
+      const remaining = Math.max(0, totalQuota - used);
+
+      res.json({
+        success: true,
+        data: {
+          uuid: vehicle.uuid,
+          ownerName: vehicle.full_name,
+          mobile: vehicle.mobile,
+          reg_number: vehicle.reg_number,
+          vehicleType: vehicle.vehicle_type,
+          fuel_type: vehicle.fuel_type,
+          vehiclePhoto: vehicle.car_image_url,
+          platePhoto: vehicle.plate_image_url,
+          bluebookPhoto: vehicle.bluebook_image_url,
+          monthlyUsage: used,
+          monthlyLimit: totalQuota,
+          dailyRemaining: remaining,
+          dailyLimit: totalQuota,
+        },
+      });
     } catch (error: any) {
-      console.error("QR Verification error:", error);
       if (error.name === "TokenExpiredError") {
-        return res
-          .status(401)
-          .json({ success: false, error: "কিউআর কোডের মেয়াদ শেষ" });
+        return res.status(401).json({ success: false, error: "QR কোডের মেয়াদ শেষ। নতুন QR তৈরি করুন।" });
       }
-      res.status(401).json({ success: false, error: "অবৈধ কিউআর কোড" });
+      if (error.name?.startsWith("JsonWebToken")) {
+        return res.status(401).json({ success: false, error: "অবৈধ QR কোড" });
+      }
+      console.error("Verify QR DB error:", error.message);
+      res.status(500).json({ success: false, error: "সার্ভার ত্রুটি: " + error.message });
     }
   });
 

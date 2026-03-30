@@ -18,7 +18,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { Picker } from "@react-native-picker/picker";
 import { StatusBar } from "expo-status-bar";
 import * as ImagePicker from "expo-image-picker";
-import { CameraView, BarcodeScanningResult, Camera as CameraModule } from "expo-camera";
+import { Camera, CameraView, BarcodeScanningResult } from "expo-camera";
 import axios from "axios";
 // Web-compatible Map using simple View and Markers for simulation
 const MapView = (props: any) => (
@@ -85,7 +85,7 @@ import {
   Palette,
   Settings,
   ShieldCheck,
-  CircleCheck as CheckCircle2,
+  CheckCircle2,
   Camera as CameraIcon,
   FileText,
   Check,
@@ -113,6 +113,7 @@ import {
   NotoSerifBengali_700Bold,
 } from "@expo-google-fonts/noto-serif-bengali";
 import { COLORS, GRADIENTS, SPACING, SHADOWS } from "./constants/theme";
+import BASE_URL from "./constants/config";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import QRCode from "react-native-qrcode-svg";
 
@@ -131,13 +132,31 @@ type Screen =
   | "transaction_success"
   | "map";
 
-const API_URL = "http://192.168.1.11:3000";
+const API_URL = BASE_URL;
 
 const getFullUrl = (path: string | null) => {
   if (!path) return "";
   if (path.startsWith("http")) return path;
   return `${API_URL}${path}`;
 };
+
+// Bengali digit → English digit converter
+const bnToEn = (str: string) =>
+  str.replace(/[০-৯]/g, (d) => String("০১২৩৪৫৬৭৮৯".indexOf(d)));
+
+// Fuel price per liter (BDT)
+const FUEL_PRICE_MAP: Record<string, number> = {
+  octane: 135,
+  petrol: 130,
+  diesel: 106,
+  cng: 43,
+};
+
+const FUEL_RATES = [
+  { type: "অকটেন", price: "১৩৫.০০", change: "+২.৫০", trend: "up" },
+  { type: "পেট্রোল", price: "১৩০.০০", change: "০.০০", trend: "stable" },
+  { type: "ডিজেল", price: "১০৬.০০", change: "-১.০০", trend: "down" },
+];
 
 const TRANSACTIONS = [
   {
@@ -207,53 +226,47 @@ export default function App() {
   const [showQR, setShowQR] = React.useState(false);
   const [qrToken, setQrToken] = React.useState<string | null>(null);
   const [verificationData, setVerificationData] = React.useState<any>(null);
-  const [lastTransaction, setLastTransaction] = React.useState<any>(null);
-  const [currentOperatorId, setCurrentOperatorId] = React.useState<number | null>(null);
   const [fuelAmount, setFuelAmount] = React.useState("");
-  const [inputMode, setInputMode] = React.useState<"liter" | "taka">("liter");
-  const [fuelRates, setFuelRates] = React.useState<any[]>([
-    { fuel_type: "octane", price: "১৩৫.০০", change_amount: "+২.৫০", trend: "up" },
-    { fuel_type: "petrol", price: "১৩০.০০", change_amount: "০.০০", trend: "stable" },
-    { fuel_type: "diesel", price: "১০৬.০০", change_amount: "-১.০০", trend: "down" },
-  ]);
-  const [recentTransactions, setRecentTransactions] = React.useState<any[]>(
-    TRANSACTIONS,
-  );
+  const [isFinalizing, setIsFinalizing] = React.useState(false);
+  const [transactionResult, setTransactionResult] = React.useState<any>(null);
+  const [selectedPayment, setSelectedPayment] = React.useState<"cash" | "other">("cash");
+
   const [timeLeft, setTimeLeft] = React.useState(60); // 1 minute countdown
   const timerRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  const fetchFuelRates = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/api/fuel-prices`);
-      if (response.data.success) {
-        setFuelRates(response.data.prices);
-      }
-    } catch (error) {
-      console.error("Error fetching fuel rates:", error);
-    }
-  };
+  // Success Sheet Swipe Logic
+  const successSheetY = React.useRef(new Animated.Value(0)).current;
 
-  const fetchTransactions = async () => {
-    try {
-      const token = await AsyncStorage.getItem("fuelpass_token");
-      if (!token) return;
-
-      const response = await axios.get(`${API_URL}/api/transactions`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (response.data.success && response.data.transactions.length > 0) {
-        setRecentTransactions(response.data.transactions);
-      }
-    } catch (error) {
-      console.error("Error fetching transactions:", error);
-    }
-  };
-
-  React.useEffect(() => {
-    fetchFuelRates();
-    fetchTransactions();
-  }, [screen]);
+  // PanResponder for swiping down the success sheet
+  const successPanResponder = React.useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return gestureState.dy > 5;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          successSheetY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 100) {
+          // Swipe down enough to collapse
+          Animated.timing(successSheetY, {
+            toValue: 300,
+            duration: 300,
+            useNativeDriver: true,
+          }).start();
+        } else {
+          // Snap back
+          Animated.spring(successSheetY, {
+            toValue: 0,
+            tension: 50,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    }),
+  ).current;
 
   const fetchQRData = async () => {
     try {
@@ -376,8 +389,6 @@ export default function App() {
 
   const [fullName, setFullName] = React.useState("");
   const [email, setEmail] = React.useState("");
-  const [modelName, setModelName] = React.useState("");
-  const [color, setColor] = React.useState("");
   const [district, setDistrict] = React.useState("ঢাকা মেট্রো");
   const [series, setSeries] = React.useState("ক");
   const [number, setNumber] = React.useState("");
@@ -453,7 +464,7 @@ export default function App() {
   }, [screen]);
 
   const requestCameraPermission = async () => {
-    const { status } = await CameraModule.requestCameraPermissionsAsync();
+    const { status } = await Camera.requestCameraPermissionsAsync();
     setHasPermission(status === "granted");
     if (status !== "granted") {
       Alert.alert(
@@ -462,6 +473,7 @@ export default function App() {
       );
     } else {
       setIsScanning(true);
+      setScanned(false); // Reset scanned state
     }
   };
 
@@ -474,7 +486,22 @@ export default function App() {
       });
 
       if (response.data.success) {
-        setVerificationData(response.data.data);
+        const d = response.data.data;
+        setVerificationData({
+          ...d,
+          uuid: d.uuid,
+          ownerName: d.ownerName,
+          regNumber: d.reg_number,
+          vehicleType: d.vehicleType,
+          fuelType: d.fuel_type,
+          vehiclePhoto: d.vehiclePhoto || null,
+          platePhoto: d.platePhoto || null,
+          bluebookPhoto: d.bluebookPhoto || null,
+          dailyRemaining: d.dailyRemaining,
+          dailyLimit: d.dailyLimit,
+          monthlyUsage: d.monthlyUsage,
+          monthlyLimit: d.monthlyLimit,
+        });
         setFuelAmount(""); // Reset fuel amount
         setScreen("verification_result");
       } else {
@@ -493,7 +520,7 @@ export default function App() {
 
   const handleBarCodeScanned = ({ data }: BarcodeScanningResult) => {
     setScanned(true);
-    setIsScanning(false);
+    setIsScanning(false); // Close the scanner to show the result screen
 
     // Verify the scanned token
     verifyScannedQR(data);
@@ -516,8 +543,7 @@ export default function App() {
           }
           let result = await ImagePicker.launchCameraAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsEditing: true,
-            aspect: type === "car" ? [16, 9] : [4, 3],
+            allowsEditing: false,
             quality: 0.7,
           });
           if (!result.canceled) {
@@ -539,7 +565,7 @@ export default function App() {
           let result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.Images,
             allowsEditing: true,
-            aspect: type === "car" ? [16, 9] : [4, 3],
+            aspect: [4, 3],
             quality: 0.7,
           });
           if (!result.canceled) {
@@ -560,19 +586,32 @@ export default function App() {
     }
     setLoading(true);
     try {
-      // Create combined FormData
+      const response = await fetch(`${API_URL}/api/register-vehicle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName,
+          mobileNumber,
+          email,
+          district: district,
+          series: series,
+          number: number,
+          type: vehicleType,
+          model: "Toyota",
+          color: "White",
+          engineNumber: "123456",
+          reg_number: `${district}-${series}-${number}`,
+          fuel_type: vehicleType === "bike" ? "petrol" : "octane",
+          password,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.error || data.message || "Registration failed");
+
+      // Now upload images
       const formData = new FormData();
-      formData.append("fullName", String(fullName));
-      formData.append("mobileNumber", String(mobileNumber));
-      formData.append("email", String(email));
-      formData.append("password", String(password));
-      formData.append("district", String(district));
-      formData.append("series", String(series));
-      formData.append("number", String(number));
-      formData.append("type", String(vehicleType));
-      formData.append("model", String(modelName || "Toyota"));
-      formData.append("color", String(color || "White"));
-      formData.append("engineNumber", "123456");
 
       const appendImage = (uri: string, name: string) => {
         if (!uri) return;
@@ -590,23 +629,26 @@ export default function App() {
       appendImage(plateImage, "plate");
       appendImage(bluebookImage, "bluebook");
 
-      const response = await fetch(`${API_URL}/api/register-vehicle`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          // Don't set Content-Type, fetch will set multipart/form-data with boundary
+      const uploadResponse = await fetch(
+        `${API_URL}/api/upload-vehicle-images`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${data.token}`,
+            Accept: "application/json",
+          },
+          body: formData,
         },
-        body: formData,
-      });
+      );
 
-      const data = await response.json();
-      if (!response.ok)
-        throw new Error(data.error || data.message || "Registration failed");
-
-      if (data.success) {
+      const uploadData = await uploadResponse.json();
+      if (uploadResponse.ok && uploadData.success) {
         setScreen("success");
       } else {
-        Alert.alert("ত্রুটি", data.error || "রেজিস্ট্রেশন ব্যর্থ হয়েছে।");
+        Alert.alert(
+          "আংশিক সফল",
+          "রেজিস্ট্রেশন হয়েছে কিন্তু ছবি আপলোড ব্যর্থ হয়েছে।",
+        );
       }
     } catch (err: any) {
       Alert.alert("ত্রুটি", err.message || "সার্ভারের সাথে সংযোগ বিচ্ছিন্ন");
@@ -637,17 +679,12 @@ export default function App() {
           setEmail(data.user.email || "");
           setVehicleType(data.user.type || "car");
           setDistrict(data.user.district || "ঢাকা মেট্রো");
-          setModelName(data.user.model || "");
-          setColor(data.user.color || "");
           setSeries(data.user.series || "ক");
           setNumber(data.user.regNumber || "");
           setCarImage(data.user.carImageUrl || null);
           setPlateImage(data.user.plateImageUrl || null);
           setBluebookImage(data.user.bluebookImageUrl || null);
           setUserRoleActual(data.user.role || "owner");
-          if (data.user.role === 'operator') {
-            setCurrentOperatorId(data.user.id);
-          }
         }
         setScreen("dashboard");
       } else {
@@ -660,135 +697,16 @@ export default function App() {
     }
   };
 
-  const renderTransactionSuccess = () => (
-    <SafeAreaView style={styles.operatorContainer}>
-      <StatusBar style="dark" />
-      <View style={[styles.operatorHeader, { borderBottomWidth: 0 }]}>
-        <TouchableOpacity
-          onPress={() => setScreen("dashboard")}
-          style={styles.opHeaderBtn}
-        >
-          <ArrowLeft size={24} color={COLORS.primary} />
-        </TouchableOpacity>
-        <Text style={[styles.opHeaderText, { flex: 1, textAlign: "center", marginRight: 40 }]}>
-          লেনদেন সম্পন্ন
-        </Text>
-      </View>
-
-      <ScrollView contentContainerStyle={{ padding: 20, alignItems: "center" }} showsVerticalScrollIndicator={false}>
-        {/* Success Icon */}
-        <View style={{ marginTop: 20, marginBottom: 20 }}>
-          <View style={{ width: 100, height: 100, borderRadius: 50, backgroundColor: "#065f46", justifyContent: "center", alignItems: "center" }}>
-            <Check size={60} color="#fff" />
-          </View>
-        </View>
-
-        <Text style={{ fontSize: 28, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46" }}>লেনদেন সফল হয়েছে</Text>
-        <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b", marginTop: 10 }}>
-          ট্রানজেকশন আইডি: #{lastTransaction?.id || "FP-992834"}
-        </Text>
-
-        {/* Info Card */}
-        <View style={{ width: "100%", backgroundColor: "#fff", borderRadius: 24, padding: 24, marginTop: 40, shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 10, elevation: 2 }}>
-          <View style={{ gap: 20 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <Car size={20} color="#64748b" />
-                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>গাড়ির নম্বর</Text>
-              </View>
-              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{lastTransaction?.regNumber}</Text>
-            </View>
-
-            <View style={{ height: 1.5, backgroundColor: "#f8fafc" }} />
-
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <User size={20} color="#64748b" />
-                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>ইউজারের নাম</Text>
-              </View>
-              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{lastTransaction?.ownerName}</Text>
-            </View>
-
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <Fuel size={20} color="#64748b" />
-                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>তেলের ধরন</Text>
-              </View>
-              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{verificationData?.vehicleType === "bike" ? "পেট্রোল" : "অকটেন"}</Text>
-            </View>
-
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <ActivityIndicator size={20} color="#64748b" style={{ position: "absolute" }} />
-                <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: "#64748b", justifyContent: "center", alignItems: "center" }}>
-                   <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#64748b" }} />
-                </View>
-                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>পরিমাণ</Text>
-              </View>
-              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{lastTransaction?.amount} লিটার</Text>
-            </View>
-
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <CreditCard size={20} color="#64748b" />
-                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>পেমেন্ট পদ্ধতি</Text>
-              </View>
-              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>নগদ (Cash)</Text>
-            </View>
-
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <History size={20} color="#64748b" />
-                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>সময়</Text>
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>৩০ মার্চ ২০২৬</Text>
-                <Text style={{ fontSize: 12, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>০৮:৪৫ রাত</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Total Cost Card */}
-        <View style={{ width: "100%", height: 110, backgroundColor: "#065f46", borderRadius: 20, marginTop: 24, overflow: "hidden", flexDirection: "row", padding: 24, alignItems: "center" }}>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, fontFamily: "NotoSerifBengali_400Regular" }}>মোট টাকা</Text>
-            <Text style={{ color: "#fff", fontSize: 36, fontFamily: "NotoSerifBengali_700Bold", marginTop: 4 }}>
-              {Math.round(parseFloat(lastTransaction?.amount || 0) * 135)} টাকা
-            </Text>
-          </View>
-          <View style={{ width: 64, height: 64, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.15)", justifyContent: "center", alignItems: "center" }}>
-             <CheckCircle2 color="#fff" size={32} />
-          </View>
-        </View>
-
-        {/* Buttons */}
-        <TouchableOpacity
-          onPress={() => setScreen("dashboard")}
-          style={{ width: "100%", height: 60, backgroundColor: "#065f46", borderRadius: 16, justifyContent: "center", alignItems: "center", marginTop: 30, flexDirection: "row", gap: 10 }}
-        >
-          <QrCode size={20} color="#fff" />
-          <Text style={{ color: "#fff", fontSize: 18, fontFamily: "NotoSerifBengali_700Bold" }}>পরবর্তী স্ক্যান</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={() => setScreen("dashboard")}
-          style={{ width: "100%", height: 60, backgroundColor: "#f1f5f9", borderRadius: 16, justifyContent: "center", alignItems: "center", marginTop: 15, flexDirection: "row", gap: 10 }}
-        >
-          <X size={20} color="#64748b" />
-          <Text style={{ color: "#64748b", fontSize: 18, fontFamily: "NotoSerifBengali_700Bold" }}>বন্ধ করুন</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
-  );
-
   const renderVerificationResult = () => (
     <SafeAreaView style={styles.operatorContainer}>
       <StatusBar style="dark" />
-      <View style={[styles.operatorHeader, { paddingTop: 40 }]}>
+      <View style={styles.operatorHeader}>
         <View style={styles.opHeaderLeft}>
           <TouchableOpacity
-            onPress={() => setScreen("dashboard")}
+            onPress={() => {
+              setIsScanning(false);
+              setScreen("dashboard");
+            }}
             style={styles.opHeaderBtn}
           >
             <ArrowLeft size={24} color={COLORS.primary} />
@@ -806,148 +724,292 @@ export default function App() {
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.opMainScroll, { gap: 20, paddingTop: 10 }]}
+        contentContainerStyle={[styles.opMainScroll, { gap: 20 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Verification Status Banner */}
-        <View style={{ backgroundColor: "#ecfdf5", padding: 16, borderRadius: 16, borderLeftWidth: 4, borderLeftColor: "#10b981", marginBottom: 5 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <CheckCircle2 color="#059669" size={20} />
-            <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46" }}>ইউজার ভেরিফাইড</Text>
-          </View>
-          <Text style={{ fontSize: 13, fontFamily: "NotoSerifBengali_400Regular", color: "#059669", marginTop: 2 }}>রেজিস্ট্রেশন ডাটার সাথে মিল পাওয়া গেছে</Text>
+        {/* Registration Photos */}
+        <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b", paddingHorizontal: 4 }}>
+          রেজিস্ট্রেশন ছবি
+        </Text>
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          {[
+            { uri: verificationData?.vehiclePhoto, label: "গাড়ি" },
+            { uri: verificationData?.platePhoto, label: "নম্বর প্লেট" },
+            { uri: verificationData?.bluebookPhoto, label: "ব্লুবুক" },
+          ].map((item, idx) => (
+            <View key={idx} style={{ flex: 1, alignItems: "center", gap: 6 }}>
+              <View style={{ width: "100%", height: 100, borderRadius: 14, overflow: "hidden", backgroundColor: "#f1f5f9", borderWidth: 1, borderColor: "#e2e8f0" }}>
+                {item.uri ? (
+                  <Image
+                    source={{ uri: getFullUrl(item.uri) }}
+                    style={{ width: "100%", height: "100%" }}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+                    <FileText size={28} color="#94a3b8" />
+                  </View>
+                )}
+              </View>
+              <Text style={{ fontSize: 11, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>{item.label}</Text>
+            </View>
+          ))}
         </View>
 
-        {/* Uploaded Photos Section */}
-        <View style={{ marginTop: 5 }}>
-          <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b", marginBottom: 12 }}>রেজিস্ট্রেশনের সময় আপলোড করা ছবি</Text>
-          
-          <View style={{ width: "100%", height: 180, backgroundColor: "#f1f5f9", borderRadius: 20, overflow: "hidden", marginBottom: 12, borderWidth: 1, borderColor: "#e2e8f0" }}>
-            <Image 
-              source={{ uri: getFullUrl(verificationData?.carImageUrl) || "https://images.unsplash.com/photo-1540340334550-80151c0abc8c?w=100" }} 
-              style={{ width: "100%", height: "100%" }}
-              resizeMode="cover"
-            />
-            <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", padding: 8 }}>
-              <Text style={{ color: "#fff", fontSize: 12, fontFamily: "NotoSerifBengali_400Regular", textAlign: "center" }}>মোটরযান বা গাড়ির ছবি</Text>
-            </View>
-          </View>
-
-          <View style={{ flexDirection: "row", gap: 12 }}>
-            <View style={{ flex: 1, height: 130, backgroundColor: "#f1f5f9", borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: "#e2e8f0" }}>
-              <Image 
-                source={{ uri: getFullUrl(verificationData?.plateImageUrl) || "https://images.unsplash.com/photo-1540340334550-80151c0abc8c?w=100" }} 
-                style={{ width: "100%", height: "100%" }}
-                resizeMode="cover"
-              />
-              <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", padding: 4 }}>
-                <Text style={{ color: "#fff", fontSize: 10, fontFamily: "NotoSerifBengali_400Regular", textAlign: "center" }}>প্লেট নম্বর</Text>
-              </View>
-            </View>
-
-            <View style={{ flex: 1, height: 130, backgroundColor: "#f1f5f9", borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: "#e2e8f0" }}>
-              <Image 
-                source={{ uri: getFullUrl(verificationData?.bluebookImageUrl) || "https://images.unsplash.com/photo-1540340334550-80151c0abc8c?w=100" }} 
-                style={{ width: "100%", height: "100%" }}
-                resizeMode="cover"
-              />
-              <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", padding: 4 }}>
-                <Text style={{ color: "#fff", fontSize: 10, fontFamily: "NotoSerifBengali_400Regular", textAlign: "center" }}>ব্লুবুক ছবি</Text>
-              </View>
-            </View>
-          </View>
+        {/* Success Banner */}
+        {/* Success Banner */}
+        <View
+          style={{
+            backgroundColor: "#065f46",
+            paddingVertical: 15,
+            borderRadius: 12,
+            flexDirection: "row",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <CheckCircle2 color="#fff" size={24} />
+          <Text
+            style={{
+              color: "#fff",
+              fontSize: 18,
+              fontFamily: "NotoSerifBengali_700Bold",
+            }}
+          >
+            সঠিক গাড়ি শনাক্ত হয়েছে
+          </Text>
         </View>
 
         {/* Owner Info Card */}
-        <View style={{ backgroundColor: "#fff", padding: 20, borderRadius: 20, borderWidth: 1, borderColor: "#f1f5f9" }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+        <View
+          style={{
+            backgroundColor: "#fff",
+            padding: 20,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: "#f1f5f9",
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              marginBottom: 20,
+            }}
+          >
             <View>
-              <Text style={{ fontSize: 24, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{verificationData?.ownerName || "গাড়ির মালিক"}</Text>
-              <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b", marginTop: 4 }}>
-                {verificationData?.vehicleType === "bike" ? "মোটরসাইকেল" : "কার/জিপ"} ট্রান্সপোর্টার
+              <Text
+                style={{
+                  fontSize: 24,
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  color: "#1e293b",
+                }}
+              >
+                {verificationData?.ownerName}
+              </Text>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontFamily: "NotoSerifBengali_400Regular",
+                  color: "#64748b",
+                  marginTop: 4,
+                }}
+              >
+                {verificationData?.vehicleType} ট্র্যান্সপোর্টার
               </Text>
             </View>
-            <View style={{ backgroundColor: "#ecfdf5", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
-              <Text style={{ color: "#059669", fontFamily: "NotoSerifBengali_700Bold", fontSize: 13 }}>এক্টিভ পাস</Text>
+            <View
+              style={{
+                backgroundColor: "#ecfdf5",
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 8,
+              }}
+            >
+              <Text
+                style={{
+                  color: "#059669",
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  fontSize: 13,
+                }}
+              >
+                এক্টিভ পাস
+              </Text>
             </View>
           </View>
 
-          <View style={{ height: 1.5, backgroundColor: "#f1f5f9", marginBottom: 20 }} />
+          <View
+            style={{
+              height: 1.5,
+              backgroundColor: "#f1f5f9",
+              marginBottom: 20,
+            }}
+          />
 
-          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+          <View
+            style={{ flexDirection: "row", justifyContent: "space-between" }}
+          >
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 14, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>আজকের অবশিষ্ট</Text>
-              <Text style={{ fontSize: 22, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46", marginTop: 6 }}>
-                {verificationData?.dailyRemaining || "০.০"} / {verificationData?.dailyLimit || "৫.০"} লিটার
+              <Text
+                style={{
+                  fontSize: 14,
+                  fontFamily: "NotoSerifBengali_400Regular",
+                  color: "#64748b",
+                }}
+              >
+                আজকের অবশিষ্ট
               </Text>
+              <Text
+                style={{
+                  fontSize: 22,
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  color: "#065f46",
+                  marginTop: 6,
+                }}
+              >
+                {verificationData?.dailyRemaining} /{" "}
+                {verificationData?.dailyLimit} লিটার
+              </Text>
+              <View
+                style={{
+                  height: 8,
+                  backgroundColor: "#f1f5f9",
+                  borderRadius: 4,
+                  marginTop: 10,
+                }}
+              >
+                <View
+                  style={{
+                    width: `${(verificationData?.dailyRemaining / verificationData?.dailyLimit) * 100}%`,
+                    height: "100%",
+                    backgroundColor: "#065f46",
+                    borderRadius: 4,
+                  }}
+                />
+              </View>
             </View>
             <View style={{ width: 20 }} />
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 14, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>মাসিক মোট কোটা</Text>
-              <Text style={{ fontSize: 22, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b", marginTop: 6 }}>
-                {verificationData?.monthlyUsage || "০"} / {verificationData?.monthlyLimit || "১০০"} লিটার
+              <Text
+                style={{
+                  fontSize: 14,
+                  fontFamily: "NotoSerifBengali_400Regular",
+                  color: "#64748b",
+                }}
+              >
+                মাসিক মোট ব্যবহৃত
               </Text>
+              <Text
+                style={{
+                  fontSize: 22,
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  color: "#1e293b",
+                  marginTop: 6,
+                }}
+              >
+                {verificationData?.monthlyUsage} /{" "}
+                {verificationData?.monthlyLimit} লিটার
+              </Text>
+              <View
+                style={{
+                  height: 8,
+                  backgroundColor: "#f1f5f9",
+                  borderRadius: 4,
+                  marginTop: 10,
+                }}
+              >
+                <View
+                  style={{
+                    width: `${(verificationData?.monthlyUsage / verificationData?.monthlyLimit) * 100}%`,
+                    height: "100%",
+                    backgroundColor: "#cbd5e1",
+                    borderRadius: 4,
+                  }}
+                />
+              </View>
             </View>
-          </View>
-        </View>
-
-        {/* Amount Input Mode Selector */}
-        <View style={{ marginTop: 10 }}>
-          <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b", marginBottom: 12 }}>ইনপুট মোড সিলেক্ট করুন</Text>
-          <View style={{ flexDirection: "row", gap: 10, backgroundColor: "#f1f5f9", padding: 6, borderRadius: 14 }}>
-            <TouchableOpacity 
-              onPress={() => { setInputMode("liter"); setFuelAmount(""); }}
-              style={{ flex: 1, height: 45, backgroundColor: inputMode === "liter" ? "#fff" : "transparent", borderRadius: 10, justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOpacity: inputMode === "liter" ? 0.05 : 0, shadowRadius: 5, elevation: inputMode === "liter" ? 2 : 0 }}
-            >
-              <Text style={{ color: inputMode === "liter" ? "#065f46" : "#64748b", fontFamily: "NotoSerifBengali_700Bold" }}>লিটার (Liter)</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              onPress={() => { setInputMode("taka"); setFuelAmount(""); }}
-              style={{ flex: 1, height: 45, backgroundColor: inputMode === "taka" ? "#fff" : "transparent", borderRadius: 10, justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOpacity: inputMode === "taka" ? 0.05 : 0, shadowRadius: 5, elevation: inputMode === "taka" ? 2 : 0 }}
-            >
-              <Text style={{ color: inputMode === "taka" ? "#065f46" : "#64748b", fontFamily: "NotoSerifBengali_700Bold" }}>টাকা (Taka)</Text>
-            </TouchableOpacity>
           </View>
         </View>
 
         {/* Input Section */}
-        <View style={{ alignItems: "center", marginTop: 20 }}>
-          <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>
-            {inputMode === "liter" ? "তেল প্রদানের পরিমাণ (লিটার)" : "তেল প্রদানের পরিমাণ (টাকা)"}
+        <View style={{ alignItems: "center", marginTop: 10 }}>
+          <Text
+            style={{
+              fontSize: 16,
+              fontFamily: "NotoSerifBengali_400Regular",
+              color: "#64748b",
+            }}
+          >
+            তেল প্রদানের পরিমাণ (লিটার)
           </Text>
-          <View style={{ width: "100%", alignItems: "center", borderBottomWidth: 3, borderBottomColor: "#1e293b", paddingVertical: 10, marginTop: 5, flexDirection: "row", justifyContent: "center" }}>
-             <Text style={{ fontSize: 44, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46" }}>
-               {inputMode === "taka" ? "৳" : ""} {fuelAmount || "০০"}
-             </Text>
-             {inputMode === "liter" && <Text style={{ fontSize: 20, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46", marginLeft: 8, marginTop: 15 }}>লিটার</Text>}
-          </View>
-          {inputMode === "taka" && fuelAmount ? (
-            <Text style={{ marginTop: 8, color: "#059669", fontFamily: "NotoSerifBengali_400Regular" }}>
-              আনুমানিক: {(parseFloat(fuelAmount) / 135).toFixed(2)} লিটার
+          <View
+            style={{
+              width: 180,
+              alignItems: "center",
+              borderBottomWidth: 3,
+              borderBottomColor: "#1e293b",
+              paddingVertical: 10,
+              marginTop: 5,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 44,
+                fontFamily: "NotoSerifBengali_700Bold",
+                color: "#065f46",
+              }}
+            >
+              {fuelAmount || "০০.০০"}
             </Text>
-          ) : null}
+          </View>
         </View>
 
         {/* Keypad */}
         <View style={{ gap: 10 }}>
-          {[["১", "২", "৩"], ["৪", "৫", "৬"], ["৭", "৮", "৯"], [".", "০", "del"]].map((row, i) => (
+          {[
+            ["১", "২", "৩"],
+            ["৪", "৫", "৬"],
+            ["৭", "৮", "৯"],
+            [".", "০", "del"],
+          ].map((row, i) => (
             <View key={i} style={{ flexDirection: "row", gap: 10 }}>
               {row.map((key) => (
                 <TouchableOpacity
                   key={key}
                   onPress={() => {
                     if (key === "del") {
-                      setFuelAmount(prev => prev.slice(0, -1));
+                      setFuelAmount((prev) => prev.slice(0, -1));
                     } else if (fuelAmount.length < 5) {
-                      setFuelAmount(prev => prev + key);
+                      setFuelAmount((prev) => prev + key);
                     }
                   }}
-                  style={{ flex: 1, height: 60, backgroundColor: "#fff", borderRadius: 12, justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 5, elevation: 1 }}
+                  style={{
+                    flex: 1,
+                    height: 60,
+                    backgroundColor: "#fff",
+                    borderRadius: 12,
+                    justifyContent: "center",
+                    alignItems: "center",
+                    shadowColor: "#000",
+                    shadowOpacity: 0.05,
+                    shadowRadius: 5,
+                    elevation: 1,
+                  }}
                 >
                   {key === "del" ? (
                     <X size={24} color="#1e293b" />
                   ) : (
-                    <Text style={{ fontSize: 24, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{key}</Text>
+                    <Text
+                      style={{
+                        fontSize: 24,
+                        fontFamily: "NotoSerifBengali_700Bold",
+                        color: "#1e293b",
+                      }}
+                    >
+                      {key}
+                    </Text>
                   )}
                 </TouchableOpacity>
               ))}
@@ -957,64 +1019,417 @@ export default function App() {
 
         {/* Payment Methods */}
         <View style={{ marginTop: 10 }}>
-          <Text style={{ fontSize: 14, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b", marginBottom: 12 }}>পেমেন্ট মেথড</Text>
+          <Text
+            style={{
+              fontSize: 14,
+              fontFamily: "NotoSerifBengali_400Regular",
+              color: "#64748b",
+              marginBottom: 12,
+            }}
+          >
+            পেমেন্ট মেথড
+          </Text>
           <View style={{ flexDirection: "row", gap: 10 }}>
-             <TouchableOpacity style={{ flex: 1, height: 50, backgroundColor: "#fff", borderRadius: 10, justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#f1f5f9" }}>
-               <Text style={{ fontFamily: "NotoSerifBengali_700Bold", fontSize: 16 }}>নগদ (Cash)</Text>
-             </TouchableOpacity>
-             <TouchableOpacity style={{ flex: 1, height: 50, backgroundColor: "#f1f5f9", borderRadius: 10, justifyContent: "center", alignItems: "center" }}>
-               <Text style={{ fontFamily: "NotoSerifBengali_400Regular", fontSize: 16 }}>অন্যান্য</Text>
-             </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setSelectedPayment("cash")}
+              style={{
+                flex: 1,
+                height: 50,
+                backgroundColor: selectedPayment === "cash" ? "#065f46" : "#fff",
+                borderRadius: 10,
+                justifyContent: "center",
+                alignItems: "center",
+                borderWidth: 2,
+                borderColor: selectedPayment === "cash" ? "#065f46" : "#f1f5f9",
+              }}
+            >
+              <Text
+                style={{ fontFamily: "NotoSerifBengali_700Bold", fontSize: 16, color: selectedPayment === "cash" ? "#fff" : "#1e293b" }}
+              >
+                নগদ (Cash)
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setSelectedPayment("other")}
+              style={{
+                flex: 1,
+                height: 50,
+                backgroundColor: selectedPayment === "other" ? "#065f46" : "#f1f5f9",
+                borderRadius: 10,
+                justifyContent: "center",
+                alignItems: "center",
+                borderWidth: 2,
+                borderColor: selectedPayment === "other" ? "#065f46" : "transparent",
+              }}
+            >
+              <Text
+                style={{
+                  fontFamily: "NotoSerifBengali_400Regular",
+                  fontSize: 16,
+                  color: selectedPayment === "other" ? "#fff" : "#1e293b",
+                }}
+              >
+                অন্যান্য
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
         {/* Action Button */}
-        <TouchableOpacity 
+        <TouchableOpacity
           onPress={async () => {
-            const finalAmount = inputMode === "taka" 
-              ? (parseFloat(fuelAmount) / 135).toFixed(2) 
-              : fuelAmount;
-            
-            setLoading(true);
+            setIsFinalizing(true);
             try {
-              const response = await axios.post(`${API_URL}/api/complete-transaction`, {
-                vehicleId: verificationData?.vehicleId,
-                pumpId: 1, // Hardcoded for operator
-                operatorId: currentOperatorId || 8,
-                fuelType: verificationData?.vehicleType === "bike" ? "petrol" : "octane",
-                amountLiters: finalAmount
-              });
-
-              if (response.data.success) {
-                setLastTransaction({
-                  id: response.data.transactionId,
-                  regNumber: verificationData?.regNumber,
-                  ownerName: verificationData?.ownerName,
-                  amount: finalAmount,
-                  date: "৩০ মার্চ ২০২৬",
-                  time: "০৮:৪৫ রাত"
-                });
+              const token = await AsyncStorage.getItem("fuelpass_token");
+              const liters = parseFloat(bnToEn(fuelAmount || "0"));
+              const resp = await axios.post(
+                `${API_URL}/api/record-transaction`,
+                {
+                  vehicleUuid: verificationData?.uuid,
+                  amountLiters: liters,
+                  fuelType: verificationData?.fuelType || "octane",
+                  paymentMethod: selectedPayment,
+                },
+                { headers: { Authorization: `Bearer ${token}` } },
+              );
+              if (resp.data.success) {
+                setTransactionResult(resp.data.transaction);
                 setScreen("transaction_success");
               } else {
-                Alert.alert("ত্রুটি", response.data.error || "লেনদেন সম্পন্ন করা সম্ভব হয়নি");
+                Alert.alert("ত্রুটি", resp.data.error || "ট্রানজেকশন সংরক্ষণ ব্যর্থ");
               }
-            } catch (error: any) {
-              console.error("Transaction completion error:", error);
-              Alert.alert("ত্রুটি", error.response?.data?.error || "সার্ভার এরর");
+            } catch (e: any) {
+              Alert.alert("ত্রুটি", e?.response?.data?.error || "সার্ভারের সাথে যোগাযোগ বিচ্ছিন্ন");
             } finally {
-              setLoading(false);
+              setIsFinalizing(false);
             }
           }}
-          disabled={!fuelAmount || loading}
-          style={{ height: 65, backgroundColor: "#065f46", borderRadius: 16, justifyContent: "center", alignItems: "center", marginTop: 20, opacity: fuelAmount && !loading ? 1 : 0.6 }}
+          disabled={!fuelAmount || isFinalizing}
+          style={{
+            height: 65,
+            backgroundColor: "#065f46",
+            borderRadius: 16,
+            justifyContent: "center",
+            alignItems: "center",
+            marginTop: 20,
+            opacity: fuelAmount ? 1 : 0.6,
+          }}
         >
-          {loading ? (
-             <ActivityIndicator color="#fff" />
+          {isFinalizing ? (
+            <ActivityIndicator color="#fff" />
           ) : (
-             <Text style={{ color: "#fff", fontSize: 20, fontFamily: "NotoSerifBengali_700Bold" }}>তেল প্রদান সম্পন্ন করুন</Text>
+            <Text
+              style={{
+                color: "#fff",
+                fontSize: 20,
+                fontFamily: "NotoSerifBengali_700Bold",
+              }}
+            >
+              তেল প্রদান সম্পন্ন করুন
+            </Text>
           )}
         </TouchableOpacity>
       </ScrollView>
+    </SafeAreaView>
+  );
+
+  const renderTransactionSuccess = () => (
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#fff" }}>
+      <StatusBar style="dark" />
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#fff",
+          padding: 30,
+          paddingTop: 60,
+        }}
+      >
+        {/* Success Animation Area */}
+        <View style={{ alignItems: "center", marginBottom: 30, marginTop: 20 }}>
+          <View
+            style={{
+              width: 100,
+              height: 100,
+              borderRadius: 50,
+              backgroundColor: "#d1fae5",
+              justifyContent: "center",
+              alignItems: "center",
+              marginBottom: 20,
+              borderWidth: 10,
+              borderColor: "#ecfdf5",
+            }}
+          >
+            <Check color="#059669" size={48} strokeWidth={3} />
+          </View>
+          <Text
+            style={{
+              fontSize: 28,
+              fontFamily: "NotoSerifBengali_700Bold",
+              color: "#1e293b",
+              textAlign: "center",
+            }}
+          >
+            অভিনন্দন!
+          </Text>
+          <Text
+            style={{
+              fontSize: 20,
+              fontFamily: "NotoSerifBengali_700Bold",
+              color: "#059669",
+              textAlign: "center",
+              marginTop: 5,
+            }}
+          >
+            পেমেন্ট সফল হয়েছে
+          </Text>
+          <Text
+            style={{
+              fontSize: 13,
+              color: "#94a3b8",
+              fontFamily: "NotoSerifBengali_400Regular",
+              marginTop: 8,
+            }}
+          >
+            ট্রানজ্যাকশন আইডি: #{transactionResult?.id || "FP------"}
+          </Text>
+        </View>
+
+        {/* Receipt Card */}
+        <View
+          style={{
+            backgroundColor: "#f8fafc",
+            borderRadius: 24,
+            padding: 20,
+            borderWidth: 1.5,
+            borderColor: "#f1f5f9",
+            borderStyle: "dashed",
+            width: "100%",
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginBottom: 20,
+            }}
+          >
+            <View>
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: "#94a3b8",
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                যানবাহন নম্বর
+              </Text>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  color: "#1e293b",
+                  marginTop: 4,
+                }}
+              >
+                {verificationData?.regNumber || "ঢাকা মেট্রো-ল ১২-৩৪"}
+              </Text>
+            </View>
+            <View style={{ alignItems: "flex-end" }}>
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: "#94a3b8",
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                ফুয়েল টাইপ
+              </Text>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontFamily: "NotoSerifBengali_700Bold",
+                  color: "#1e293b",
+                  marginTop: 4,
+                }}
+              >
+                {(() => {
+                  const fm: {[k:string]:string} = {octane:"অকটেন",petrol:"পেট্রোল",diesel:"ডিজেল",cng:"সিএনজি"};
+                  return verificationData?.fuelType ? (fm[verificationData.fuelType.toLowerCase()] ?? verificationData.fuelType) : "অকটেন";
+                })()} 
+              </Text>
+            </View>
+          </View>
+
+          <View
+            style={{ height: 1, backgroundColor: "#e2e8f0", marginBottom: 20 }}
+          />
+
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 12,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 13,
+                color: "#64748b",
+                fontFamily: "NotoSerifBengali_700Bold",
+              }}
+            >
+              পরিমাণ
+            </Text>
+            <Text
+              style={{
+                fontSize: 18,
+                fontFamily: "NotoSerifBengali_700Bold",
+                color: "#1e293b",
+              }}
+            >
+              {fuelAmount} লিটার
+            </Text>
+          </View>
+
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 12,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 13,
+                color: "#64748b",
+                fontFamily: "NotoSerifBengali_700Bold",
+              }}
+            >
+              লিটার প্রতি মূল্য
+            </Text>
+            <Text
+              style={{
+                fontSize: 16,
+                fontFamily: "NotoSerifBengali_700Bold",
+                color: "#1e293b",
+              }}
+            >
+              ৳{(FUEL_PRICE_MAP[(verificationData?.fuelType || "").toLowerCase()] ?? 135).toLocaleString("bn-BD")}
+            </Text>
+          </View>
+
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 13,
+                color: "#64748b",
+                fontFamily: "NotoSerifBengali_700Bold",
+              }}
+            >
+              মোট বিল
+            </Text>
+            <Text
+              style={{
+                fontSize: 28,
+                fontFamily: "NotoSerifBengali_700Bold",
+                color: "#059669",
+              }}
+            >
+              ৳{transactionResult
+                ? transactionResult.totalPrice.toLocaleString("bn-BD", { maximumFractionDigits: 2 })
+                : (() => {
+                    const liters = parseFloat(bnToEn(fuelAmount || "0"));
+                    const pricePerLiter = FUEL_PRICE_MAP[(verificationData?.fuelType || "").toLowerCase()] ?? 135;
+                    const total = liters * pricePerLiter;
+                    return isNaN(total) ? "০" : total.toLocaleString("bn-BD", { maximumFractionDigits: 2 });
+                  })()}
+            </Text>
+          </View>
+        </View>
+
+        {/* Timestamp Info */}
+        <View style={{ alignItems: "center", marginTop: 25 }}>
+          <Text
+            style={{
+              fontSize: 12,
+              color: "#94a3b8",
+              fontFamily: "NotoSerifBengali_400Regular",
+            }}
+          >
+            তারিখ: {new Date(transactionResult?.createdAt || Date.now()).toLocaleDateString("bn-BD")} •{" "}
+            {new Date(transactionResult?.createdAt || Date.now()).toLocaleTimeString("bn-BD")}
+          </Text>
+        </View>
+
+        {/* Action Buttons */}
+        <View style={{ marginTop: "auto", marginBottom: 20 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: COLORS.primary,
+              height: 60,
+              borderRadius: 18,
+              justifyContent: "center",
+              alignItems: "center",
+              shadowColor: COLORS.primary,
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.2,
+              shadowRadius: 10,
+              elevation: 8,
+              marginBottom: 12,
+            }}
+            onPress={() => {
+              setIsScanning(false);
+              setScanned(false);
+              setScreen("dashboard");
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 17,
+                fontFamily: "NotoSerifBengali_700Bold",
+                color: "#fff",
+              }}
+            >
+              ড্যাশবোর্ডে ফিরুন
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={{
+              height: 50,
+              justifyContent: "center",
+              alignItems: "center",
+            }}
+            onPress={() => {
+              setScanned(false);
+              setIsScanning(true);
+              setScreen("dashboard");
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 15,
+                fontFamily: "NotoSerifBengali_700Bold",
+                color: "#64748b",
+              }}
+            >
+              পুনরায় স্ক্যান করুন
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </SafeAreaView>
   );
 
@@ -1023,6 +1438,13 @@ export default function App() {
       <StatusBar style="dark" />
       <View style={styles.operatorHeader}>
         <View style={styles.opHeaderLeft}>
+          <TouchableOpacity style={styles.opHeaderBtn}>
+            <Plus
+              size={24}
+              color={COLORS.primary}
+              style={{ transform: [{ rotate: "45deg" }] }}
+            />
+          </TouchableOpacity>
           <Text style={styles.opHeaderText}>অপারেটর ড্যাশবোর্ড</Text>
         </View>
         <TouchableOpacity
@@ -1372,10 +1794,10 @@ export default function App() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.ratesScroll}
           >
-            {fuelRates.map((rate, idx) => (
+            {FUEL_RATES.map((rate, idx) => (
               <View key={idx} style={styles.rateCard}>
                 <View style={styles.rateHeader}>
-                  <Text style={styles.rateType}>{rate.fuel_type === 'octane' ? 'অকটেন' : rate.fuel_type === 'petrol' ? 'পেট্রোল' : 'ডিজেল'}</Text>
+                  <Text style={styles.rateType}>{rate.type}</Text>
                   {rate.trend === "up" ? (
                     <TrendingUp size={14} color="#ef4444" />
                   ) : rate.trend === "down" ? (
@@ -1396,7 +1818,7 @@ export default function App() {
                     },
                   ]}
                 >
-                  {rate.change_amount} / লিটার
+                  {rate.change} / লিটার
                 </Text>
               </View>
             ))}
@@ -1482,7 +1904,7 @@ export default function App() {
               <Text style={styles.seeAllText}>সব দেখুন</Text>
             </TouchableOpacity>
           </View>
-          {recentTransactions.slice(0, 3).map((tx) => (
+          {TRANSACTIONS.map((tx) => (
             <TouchableOpacity key={tx.id} style={styles.txListItem}>
               <View style={styles.txIconBox}>
                 <History size={20} color={COLORS.primary} />
@@ -1589,8 +2011,8 @@ export default function App() {
           </LinearGradient>
         </View>
 
-        <Text style={styles.txGroupTitle}>সাম্প্রতিক লেনদেন</Text>
-        {recentTransactions.map((tx) => (
+        <Text style={styles.txGroupTitle}>মার্চ ২০২৪</Text>
+        {TRANSACTIONS.map((tx) => (
           <View key={tx.id} style={styles.txDetailCard}>
             <View style={styles.txDetailHeader}>
               <View style={styles.txDetailIconCircle}>
@@ -2226,31 +2648,6 @@ export default function App() {
                     </View>
                   </View>
 
-                  <View style={{ flexDirection: "row", gap: SPACING.m, marginTop: SPACING.m }}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.label}>মডেল (Model)</Text>
-                      <View style={styles.inputWrapper}>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="Toyota Camry"
-                          value={modelName}
-                          onChangeText={setModelName}
-                        />
-                      </View>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.label}>রং (Color)</Text>
-                      <View style={styles.inputWrapper}>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="White"
-                          value={color}
-                          onChangeText={setColor}
-                        />
-                      </View>
-                    </View>
-                  </View>
-
                   <View style={styles.inputGroup}>
                     <Text style={styles.label}>যানবাহনের ধরণ</Text>
                     <View style={styles.typeSelector}>
@@ -2859,29 +3256,32 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
   },
   opScannerStatus: {
-    padding: 24,
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: COLORS.primary,
+    padding: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 12,
-    flexWrap: "wrap",
-    backgroundColor: COLORS.primary,
   },
   opPulseRow: {
     flexDirection: "row",
     gap: 6,
   },
   opPulseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: "#fff",
   },
   opScannerStatusText: {
     color: "#fff",
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: "NotoSerifBengali_700Bold",
-    textAlign: "center",
+    letterSpacing: 1,
   },
   opInventoryCard: {
     backgroundColor: "#fff",
@@ -4291,1747 +4691,16 @@ const styles = StyleSheet.create({
     fontFamily: "NotoSerifBengali_700Bold",
     color: COLORS.primary,
   },
-  stepDot: {
-    width: 24,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: COLORS.surfaceContainerHigh,
-  },
-  stepText: {
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.secondary,
-    fontSize: 14,
-  },
-  fullImageCard: {
-    width: "100%",
-    height: 180,
-    backgroundColor: COLORS.surfaceContainerLowest,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: COLORS.outlineVariant,
-    borderStyle: "dashed",
-    overflow: "hidden",
-    marginBottom: SPACING.md,
-    justifyContent: "center",
-  },
-  imagePreviewWrapper: {
-    width: "100%",
-    height: "100%",
-  },
-  fullImage: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "cover",
-  },
-  successOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.4)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  successOverlayText: {
-    color: "#fff",
-    fontFamily: "NotoSerifBengali_400Regular",
-    fontSize: 12,
-    marginTop: 4,
-  },
-  uploadPlaceholder: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: SPACING.lg,
-  },
-  uploadIconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: COLORS.primaryContainer + "30",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  uploadTitle: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  uploadDesc: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  imageRow: {
-    flexDirection: "row",
-    gap: SPACING.md,
-    marginBottom: SPACING.lg,
-  },
-  halfImageCard: {
-    flex: 1,
-    height: 120,
-    backgroundColor: COLORS.surfaceContainerLowest,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: COLORS.outlineVariant,
-    borderStyle: "dashed",
-    justifyContent: "center",
-    alignItems: "center",
-    overflow: "hidden",
-  },
-  halfCardTitle: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.secondary,
-    marginTop: 8,
-  },
-  miniIconCircle: {
-    position: "absolute",
-    top: 8,
-    left: 8,
-    backgroundColor: COLORS.primaryContainer + "20",
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 1,
-  },
-  miniCheck: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-    backgroundColor: COLORS.primary,
-    borderRadius: 10,
-    width: 20,
-    height: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  infoAlert: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: COLORS.primaryContainer + "20",
-    padding: SPACING.md,
-    borderRadius: 12,
-    marginBottom: SPACING.lg,
-    borderWidth: 1,
-    borderColor: COLORS.primary + "30",
-  },
-  infoAlertText: {
-    flex: 1,
-    marginLeft: 10,
-    fontSize: 13,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.primary,
-  },
-  warningCard: {
-    flexDirection: "row",
-    gap: 12,
-    padding: SPACING.md,
-    backgroundColor: "#fef2f2",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#fee2e2",
-    marginBottom: SPACING.lg,
-  },
-  warningText: {
-    flex: 1,
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "#991b1b",
-    lineHeight: 18,
-  },
-  headerIconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.surfaceContainer,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  headerTitleCenter: {
-    alignItems: "center",
-  },
-  regHeaderTitle: {
-    fontSize: 20,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  stepIndicatorText: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  progressTrack: {
-    height: 4,
-    backgroundColor: COLORS.surfaceContainerHigh,
-    borderRadius: 2,
-    marginBottom: SPACING.lg,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: COLORS.primary,
-  },
-  typeButton: {
-    flex: 1,
-    flexDirection: "row",
-    height: 48,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: COLORS.surfaceContainerLowest,
-  },
-  typeSelector: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  typeText: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.secondary,
-  },
-  topSection: {
-    alignItems: "center",
-  },
-  iconCircle: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: SPACING.lg,
-    borderWidth: 1.5,
-    borderColor: "rgba(255,255,255,0.25)",
-  },
-  brandTitleText: {
-    fontSize: 40,
-    fontWeight: "900",
-    color: "#fff",
-    letterSpacing: 0.5,
-  },
-  brandSubtitle: {
-    fontSize: 14,
-    color: "rgba(255,255,255,0.7)",
-    letterSpacing: 4,
-    marginTop: SPACING.xs,
-  },
-  middleSection: {
-    alignItems: "center",
-  },
-  welcomeTitle: {
-    fontSize: 36,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#fff",
-    marginBottom: SPACING.md,
-  },
-  welcomeText: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "rgba(255,255,255,0.9)",
-    textAlign: "center",
-    lineHeight: 24,
-  },
-  bottomSection: {
-    gap: SPACING.md,
-  },
-  loginButton: {
-    height: 60,
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: SPACING.sm,
-    shadowColor: SHADOWS.editorial.shadowColor,
-    shadowOffset: SHADOWS.editorial.shadowOffset,
-    shadowOpacity: SHADOWS.editorial.shadowOpacity,
-    shadowRadius: SHADOWS.editorial.shadowRadius,
-    elevation: SHADOWS.editorial.elevation,
-  },
-  loginText: {
-    fontSize: 18,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.primary,
-  },
-  registerButton: {
-    height: 60,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.3)",
-  },
-  registerText: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#fff",
-  },
-  row: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  // Dashboard Styles
-  dashboardContainer: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
-  dashboardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: SPACING.lg,
-    paddingTop: 60,
-    paddingBottom: 20,
-    backgroundColor: "#fff",
-  },
-  profileSection: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  avatarWrapper: {
-    position: "relative",
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 2,
-    borderColor: COLORS.primaryContainer + "40",
-  },
-  statusIndicator: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: "#10b981",
-    borderWidth: 2,
-    borderColor: "#fff",
-  },
-  welcomeTextSmall: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  userNameText: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  headerActions: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: COLORS.surfaceContainerLowest,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-  },
-  badge: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#ef4444",
-    borderWidth: 1.5,
-    borderColor: "#fff",
-  },
-  sectionContainer: {
-    marginTop: 24,
-    paddingHorizontal: SPACING.lg,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  seeAllText: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.primary,
-  },
-  ratesScroll: {
-    paddingRight: 20,
-    gap: 12,
-  },
-  rateCard: {
-    width: 140,
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-  },
-  rateHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  rateType: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.secondary,
-  },
-  ratePrice: {
-    fontSize: 20,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  rateChange: {
-    fontSize: 10,
-    fontFamily: "NotoSerifBengali_400Regular",
-    marginTop: 4,
-  },
-  usageContainer: {
-    marginTop: 24,
-    paddingHorizontal: SPACING.lg,
-  },
-  usageCard: {
-    borderRadius: 24,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  usageHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  usageTitle: {
-    fontSize: 18,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  timeBadge: {
-    backgroundColor: COLORS.primaryContainer + "20",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  timeBadgeText: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.primary,
-  },
-  gaugeContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 32,
-  },
-  gaugeBackground: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: COLORS.surfaceContainerHigh,
-    justifyContent: "flex-end",
-    alignItems: "center",
-    overflow: "hidden",
-    position: "relative",
-  },
-  gaugeFill: {
-    position: "absolute",
-    bottom: 0,
-    width: "100%",
-    backgroundColor: COLORS.primary,
-    opacity: 0.2,
-  },
-  gaugeCenter: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  gaugeValue: {
-    fontSize: 32,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.primary,
-  },
-  gaugeUnit: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  usageDetails: {
-    flex: 1,
-    gap: 16,
-  },
-  usageDetailItem: {
-    gap: 4,
-  },
-  usageDetailLabel: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  usageDetailValue: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  usageDetailDivider: {
-    height: 1,
-    backgroundColor: COLORS.outlineVariant,
-  },
-  quotaSection: {
-    marginTop: 24,
-    paddingHorizontal: SPACING.lg,
-  },
-  quotaCard: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-  },
-  quotaHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 16,
-  },
-  quotaTitle: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  quotaSubtitle: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  quotaPercentage: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.primary,
-  },
-  progressBarBg: {
-    height: 8,
-    backgroundColor: COLORS.surfaceContainerHigh,
-    borderRadius: 4,
-    marginBottom: 12,
-    overflow: "hidden",
-  },
-  progressBarFill: {
-    height: "100%",
-    borderRadius: 4,
-  },
-  quotaBottom: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  quotaStats: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  quotaRemaining: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  vehicleSmallCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff",
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-    marginTop: 8,
-  },
-  vehicleIconBox: {
-    width: 52,
-    height: 52,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  vehicleInfoBox: {
-    flex: 1,
-    marginLeft: 16,
-  },
-  vehicleModelName: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  vehiclePlateNumber: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-    marginTop: 2,
-  },
-  txListItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff",
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-    marginBottom: 12,
-  },
-  txIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.surfaceContainerHigh,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  txMainInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  txTitle: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  txDate: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-    marginTop: 2,
-  },
-  txAmountInfo: {
-    alignItems: "flex-end",
-  },
-  txPrice: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  txStatus: {
-    fontSize: 10,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#10b981",
-    marginTop: 2,
-  },
-  fab: {
-    position: "absolute",
-    bottom: 100,
-    right: 20,
-    borderRadius: 30,
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 8,
-    zIndex: 10,
-  },
-  fabGradient: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  bottomNav: {
-    position: "absolute",
-    bottom: 0,
-    width: "100%",
-    height: 80,
-    backgroundColor: "#fff",
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-    paddingBottom: 20,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.outlineVariant,
-  },
-  navItem: {
-    alignItems: "center",
-    justifyContent: "center",
-    width: 60,
-  },
-  navIconActive: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 4,
-  },
-  navText: {
-    fontSize: 10,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.secondary,
-  },
-  navTextActive: {
-    color: "#059669",
-  },
-  // Subscreen Styles
-  fullScreenContainer: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
-  mapViewFull: {
-    flex: 1,
-  },
-  mapContainer: {
-    flex: 1,
-  },
-  userLocationDot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "rgba(59, 130, 246, 0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  userLocationInner: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: "#3b82f6",
-    borderWidth: 2,
-    borderColor: "#fff",
-  },
-  customMarkerContainer: {
-    alignItems: "center",
-  },
-  markerIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  markerDistanceBox: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    marginTop: 6,
-    borderWidth: 1,
-    borderColor: "#f1f5f9",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  markerDistanceText: {
-    fontSize: 10,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#334155",
-  },
-  mapSearchFloating: {
-    position: "absolute",
-    top: 20,
-    left: 20,
-    right: 20,
-    backgroundColor: "#fff",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    shadowColor: "#1e293b",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 10,
-  },
-  mapSearchText: {
-    fontSize: 14,
-    color: "#334155",
-    fontFamily: "NotoSerifBengali_700Bold",
-  },
-  stationPopupContainer: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    padding: 24,
-    paddingBottom: 120, // Increased to avoid bottom nav overlap
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 20,
-  },
-  popupHandle: {
-    width: 40,
-    height: 5,
-    backgroundColor: "#e2e8f0",
-    borderRadius: 3,
-    alignSelf: "center",
-    marginBottom: 20,
-  },
-  popupHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 20,
-  },
-  popupTitle: {
-    fontSize: 18,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#064e3b",
-    marginBottom: 4,
-  },
-  popupSubRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  popupAddress: {
-    fontSize: 12,
-    color: "#64748b",
-    fontFamily: "NotoSerifBengali_400Regular",
-  },
-  popupExpandBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#f1f5f9",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  fuelStatusRow: {
-    flexDirection: "row",
-    gap: 12,
-    marginBottom: 24,
-  },
-  fuelStatusCard: {
-    flex: 1,
-    backgroundColor: "#f0fdf4",
-    paddingVertical: 14,
-    borderRadius: 16,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#dcfce7",
-  },
-  fuelStatusCardEmpty: {
-    backgroundColor: "#fef2f2",
-    borderColor: "#fee2e2",
-  },
-  fuelTypeName: {
-    fontSize: 10,
-    color: "#64748b",
-    fontFamily: "NotoSerifBengali_400Regular",
-    marginBottom: 2,
-  },
-  fuelStatusText: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#166534",
-  },
-  fuelStatusTextEmpty: {
-    color: "#991b1b",
-  },
-  directionsBtn: {
-    backgroundColor: "#064e3b",
-    paddingVertical: 18,
-    borderRadius: 16,
-    alignItems: "center",
-  },
-  directionsBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-  },
-  minimalHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: SPACING.lg,
-    paddingTop: 60,
-    paddingBottom: 20,
-    backgroundColor: "#fff",
-  },
-  backButtonMinimal: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.surfaceContainerLowest,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-  },
-  minimalHeaderTitle: {
-    fontSize: 20,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  spendingSummaryCard: {
-    borderRadius: 24,
-    overflow: "hidden",
-    marginBottom: 24,
-  },
-  spendingGradient: {
-    padding: 24,
-  },
-  spendingLabel: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "rgba(255,255,255,0.8)",
-  },
-  spendingAmount: {
-    fontSize: 32,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#fff",
-    marginVertical: 8,
-  },
-  spendingFooter: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.2)",
-  },
-  spendingStat: {
-    flex: 1,
-  },
-  statLabel: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "rgba(255,255,255,0.7)",
-  },
-  statValue: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#fff",
-  },
-  statDivider: {
-    width: 1,
-    height: 30,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    marginHorizontal: 16,
-  },
-  txGroupTitle: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.secondary,
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  txDetailCard: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-  },
-  txDetailHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  txDetailIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: COLORS.primaryContainer + "20",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  txDetailTitle: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  txDetailDate: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-    marginTop: 2,
-  },
-  txDetailMainAmount: {
-    fontSize: 18,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  txDetailDivider: {
-    height: 1,
-    backgroundColor: COLORS.outlineVariant,
-    marginBottom: 16,
-  },
-  txDetailGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 16,
-  },
-  txDetailGridItem: {
-    flex: 1,
-    minWidth: 80,
-  },
-  txGridLabel: {
-    fontSize: 11,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  txGridValue: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-    marginTop: 4,
-  },
-  profileHeaderCard: {
-    alignItems: "center",
-    paddingVertical: 32,
-    backgroundColor: "#fff",
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-    marginBottom: 24,
-  },
-  profileAvatarLarge: {
-    position: "relative",
-    marginBottom: 16,
-  },
-  avatarLarge: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 4,
-    borderColor: COLORS.primaryContainer + "30",
-  },
-  editAvatarBtn: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: COLORS.primary,
-    borderWidth: 3,
-    borderColor: "#fff",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  profileNameLarge: {
-    fontSize: 24,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  badgeRow: {
-    flexDirection: "row",
-    marginTop: 8,
-  },
-  verifiedBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#10b981",
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 20,
-    gap: 6,
-  },
-  verifiedText: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#fff",
-  },
-  profileSectionTitle: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.secondary,
-    paddingHorizontal: SPACING.lg,
-    marginBottom: 12,
-  },
-  profileDetailList: {
-    backgroundColor: "#fff",
-    paddingHorizontal: SPACING.lg,
-    marginBottom: 24,
-  },
-  profileDetailItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.outlineVariant,
-    gap: 16,
-  },
-  profileDetailInfo: {
-    flex: 1,
-  },
-  profileDetailLabel: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  profileDetailValue: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-    marginTop: 2,
-  },
-  docsGrid: {
-    paddingLeft: SPACING.lg,
-    paddingRight: 20,
-    gap: 12,
-    marginBottom: 32,
-  },
-  docPreviewCard: {
-    width: 120,
-    gap: 8,
-  },
-  docImg: {
-    width: 120,
-    height: 80,
-    borderRadius: 12,
-    backgroundColor: COLORS.surfaceContainerHigh,
-  },
-  docLabel: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-    textAlign: "center",
-  },
-  logoutButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    paddingVertical: 16,
-    marginHorizontal: SPACING.lg,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#fee2e2",
-    backgroundColor: "#fef2f2",
-  },
-  logoutText: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#ef4444",
-  },
-  settingsBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.surfaceContainerLowest,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-  },
-  notifItem: {
-    flexDirection: "row",
-    padding: 20,
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.outlineVariant,
-    gap: 16,
-  },
-  notifUnread: {
-    backgroundColor: COLORS.primaryContainer + "05",
-  },
-  notifIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  notifContent: {
-    flex: 1,
-  },
-  notifHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 4,
-  },
-  notifTitle: {
-    fontSize: 15,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-  },
-  notifTime: {
-    fontSize: 11,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-  },
-  notifMessage: {
-    fontSize: 13,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-    lineHeight: 20,
-  },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.primary,
-    marginTop: 20,
-  },
-  clearAllText: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#ef4444",
-  },
-  // Modal Styles
-  modalOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0, 0, 0, 0.65)",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 40,
-    zIndex: 1000,
-    elevation: 1000,
-  },
-  qrModalContentCompact: {
-    width: "100%",
-    maxWidth: 400,
-    backgroundColor: "#fff",
-    borderRadius: 32,
-    padding: 28,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 1001,
-    zIndex: 1001,
-  },
-  closeModalBtnMinimal: {
-    position: "absolute",
-    top: 16,
-    right: 16,
-    zIndex: 10,
-    padding: 8,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 20,
-  },
-  qrHeaderCompact: {
-    alignItems: "center",
-    marginTop: 16,
-    marginBottom: 24,
-  },
-  qrTitleCompact: {
-    fontSize: 22,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#064e3b",
-    marginBottom: 6,
-  },
-  qrSubTitleCompact: {
-    fontSize: 13,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "#64748b",
-    textAlign: "center",
-    paddingHorizontal: 8,
-  },
-  qrFrameCompact: {
-    padding: 20,
-    borderRadius: 24,
-    borderWidth: 3,
-    borderColor: "#bbf7d0",
-    backgroundColor: "#fff",
-    marginBottom: 24,
-  },
-  qrInnerCompact: {
-    padding: 4,
-  },
-  qrVehicleCardCompact: {
-    width: "100%",
-    backgroundColor: "#f4f4f5",
-    borderRadius: 16,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  qrVehicleLabelCompact: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "#64748b",
-    marginBottom: 8,
-  },
-  qrPlateCompact: {
-    fontSize: 20,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#1e293b",
-    textAlign: "center",
-  },
-  qrVerifiedRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 24,
-  },
-  qrVerifiedText: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#064e3b",
-  },
-  qrCloseButtonCompact: {
-    width: "100%",
-    backgroundColor: "#064e3b",
-    height: 54,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  qrCloseButtonText: {
-    fontSize: 18,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#fff",
-  },
-  // Keep original styles for other parts if needed but clean up unused ones
-  qrHeaderInfo: {
-    alignItems: "center",
-    gap: 12,
-  },
-  qrModalTitleWhite: {
-    fontSize: 24,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#fff",
-    letterSpacing: 0.5,
-  },
-  qrBody: {
-    padding: 32,
-    alignItems: "center",
-    backgroundColor: "#fff",
-  },
-  qrModalDesc: {
-    fontSize: 15,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "#475569",
-    textAlign: "center",
-    marginBottom: 40,
-    lineHeight: 24,
-  },
-  qrCodeWrapper: {
-    position: "relative",
-    padding: 24,
-    backgroundColor: "#fff",
-    borderRadius: 32,
-    borderWidth: 1,
-    borderColor: "#f1f5f9",
-    shadowColor: "#064e3b",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.05,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  qrInnerFrame: {
-    backgroundColor: "#fff",
-    padding: 12,
-  },
-  qrCornerTr: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    width: 40,
-    height: 40,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-    borderColor: "#064e3b",
-    borderTopRightRadius: 20,
-  },
-  qrCornerTl: {
-    position: "absolute",
-    top: 10,
-    left: 10,
-    width: 40,
-    height: 40,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-    borderColor: "#064e3b",
-    borderTopLeftRadius: 20,
-  },
-  qrCornerBr: {
-    position: "absolute",
-    bottom: 10,
-    right: 10,
-    width: 40,
-    height: 40,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-    borderColor: "#064e3b",
-    borderBottomRightRadius: 20,
-  },
-  qrCornerBl: {
-    position: "absolute",
-    bottom: 10,
-    left: 10,
-    width: 40,
-    height: 40,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-    borderColor: "#064e3b",
-    borderBottomLeftRadius: 20,
-  },
-  qrStatusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f0fdf4",
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginTop: 24,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: "#dcfce7",
-  },
-  dotActive: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#22c55e",
-  },
-  qrStatusText: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#166534",
-  },
-  qrVehicleDetailsCard: {
-    width: "100%",
-    backgroundColor: "#f8fafc",
-    borderRadius: 24,
-    padding: 24,
-    marginTop: 40,
-  },
-  qrVehicleMain: {
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  qrVehiclePlate: {
-    fontSize: 22,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#0f172a",
-    letterSpacing: 1,
-  },
-  qrOwnerSub: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "#64748b",
-    marginTop: 4,
-  },
-  qrDivider: {
-    height: 1,
-    backgroundColor: "#e2e8f0",
-    marginBottom: 20,
-  },
-  qrVehicleMeta: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  qrMetaItem: {
-    flex: 1,
-  },
-  qrMetaLabel: {
-    fontSize: 11,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "#64748b",
-    marginBottom: 4,
-  },
-  qrMetaValue: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#1e293b",
-  },
-  qrRefreshButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 32,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 24,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  qrRefreshButtonText: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#064e3b",
-  },
-  // Profile Redesign Styles
-  profileHeaderMinimal: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
-    backgroundColor: "#fff",
-  },
-  minimalHeaderTitleText: {
-    fontSize: 22,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#064e3b",
-  },
-  profileHeaderSection: {
-    backgroundColor: "#fff",
-    alignItems: "center",
-    paddingBottom: 40,
-    borderBottomLeftRadius: 40,
-    borderBottomRightRadius: 40,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.05,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  profileAvatarContainer: {
-    position: "relative",
-    marginTop: 20,
-    marginBottom: 20,
-  },
-  avatarCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: "#ecfdf5",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#d1fae5",
-  },
-  avatarInitial: {
-    fontSize: 40,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#064e3b",
-  },
-  verifiedIconBadge: {
-    position: "absolute",
-    bottom: 5,
-    right: 5,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 2,
-  },
-  profileNameMain: {
-    fontSize: 24,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#1e293b",
-    marginBottom: 8,
-  },
-  verifiedLabelContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#ecfdf5",
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: "#d1fae5",
-  },
-  verifiedLabelText: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#065f46",
-  },
-  profileGroup: {
-    marginTop: 32,
-    paddingHorizontal: 24,
-  },
-  profileGroupTitle: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#64748b",
-    marginBottom: 16,
-    letterSpacing: 0.5,
-  },
-  profileCardFull: {
-    backgroundColor: "#fff",
-    borderRadius: 24,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.02,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  profileRowItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
-    gap: 16,
-  },
-  iconBoxGray: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: "#f8fafc",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  rowContent: {
-    flex: 1,
-  },
-  rowLabel: {
-    fontSize: 11,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: "#94a3b8",
-    marginBottom: 2,
-  },
-  rowValue: {
-    fontSize: 15,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#1e293b",
-  },
-  docsRowFlat: {
-    gap: 16,
-  },
-  docItemFlat: {
-    width: 140,
-    gap: 10,
-  },
-  docImgPlaceholder: {
-    width: 140,
-    height: 90,
-    borderRadius: 16,
-    backgroundColor: "#f8fafc",
-    borderWidth: 1.5,
-    borderColor: "#e2e8f0",
-  },
-  realDocImg: {
-    width: 140,
-    height: 90,
-    borderRadius: 16,
-    backgroundColor: "#f1f5f9",
-    resizeMode: "cover",
-  },
-  docLabelFlat: {
-    fontSize: 12,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#64748b",
-    textAlign: "center",
-  },
-  logoutBtnProfile: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    marginTop: 40,
-    marginHorizontal: 24,
-    paddingVertical: 18,
-    borderRadius: 20,
-    backgroundColor: "#fff1f1",
-    borderWidth: 1,
-    borderColor: "#fee2e2",
-    marginBottom: 40,
-  },
-  logoutTextProfile: {
-    fontSize: 16,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: "#ef4444",
-  },
-  qrModalTitle: {
-    fontSize: 24,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-    marginBottom: 8,
-  },
-  qrModalDesc: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-    textAlign: "center",
-    marginBottom: 32,
-    lineHeight: 22,
-  },
-  qrCodeContainer: {
-    padding: 16,
-    backgroundColor: "#fff",
-    borderRadius: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  qrFrame: {
-    padding: 4,
-    borderRadius: 20,
-  },
-  qrInner: {
-    backgroundColor: "#fff",
-    padding: 16,
-    borderRadius: 16,
-  },
-  qrVehicleInfo: {
-    marginTop: 32,
-    alignItems: "center",
-  },
-  qrPlateText: {
-    fontSize: 20,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.onSurface,
-    letterSpacing: 1,
-  },
-  qrOwnerName: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_400Regular",
-    color: COLORS.secondary,
-    marginTop: 4,
-  },
-  qrRefreshBtn: {
-    marginTop: 32,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 20,
-    backgroundColor: COLORS.surfaceContainerLowest,
-    borderWidth: 1,
-    borderColor: COLORS.outlineVariant,
-  },
-  qrRefreshText: {
-    fontSize: 14,
-    fontFamily: "NotoSerifBengali_700Bold",
-    color: COLORS.primary,
-  },
-  // Web Style Usage Card
+  // Web-style Usage Card (Dashboard)
   webStyleUsageCard: {
     backgroundColor: "#fff",
-    borderRadius: 24,
-    padding: 28,
+    borderRadius: 20,
+    padding: SPACING.lg,
     alignItems: "center",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
     elevation: 4,
     borderWidth: 1,
     borderColor: "#e2e8f0",
@@ -6077,9 +4746,7 @@ const styles = StyleSheet.create({
     borderWidth: 8,
     borderColor: "#059669",
   },
-  webGaugeInner: {
-    alignItems: "center",
-  },
+  webGaugeInner: { alignItems: "center" },
   webGaugeValue: {
     fontSize: 48,
     fontFamily: "NotoSerifBengali_700Bold",
@@ -6131,4 +4798,179 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     textAlign: "center",
   },
+  // Profile Screen Styles
+  profileHeaderMinimal: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: SPACING.lg,
+    paddingTop: 60,
+    paddingBottom: 20,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.outlineVariant,
+  },
+  minimalHeaderTitleText: {
+    fontSize: 20,
+    fontFamily: "NotoSerifBengali_700Bold",
+    color: COLORS.onSurface,
+  },
+  profileHeaderSection: {
+    alignItems: "center",
+    paddingVertical: 24,
+    backgroundColor: "#fff",
+    marginBottom: 8,
+  },
+  profileAvatarContainer: {
+    position: "relative",
+    marginBottom: 12,
+  },
+  avatarCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: COLORS.primaryContainer + "30",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: COLORS.primary + "40",
+  },
+  avatarInitial: {
+    fontSize: 32,
+    fontFamily: "NotoSerifBengali_700Bold",
+    color: COLORS.primary,
+  },
+  verifiedIconBadge: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  profileNameMain: {
+    fontSize: 20,
+    fontFamily: "NotoSerifBengali_700Bold",
+    color: COLORS.onSurface,
+    marginBottom: 6,
+  },
+  verifiedLabelContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f0fdf4",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 4,
+  },
+  verifiedLabelText: {
+    fontSize: 12,
+    fontFamily: "NotoSerifBengali_700Bold",
+    color: COLORS.primary,
+  },
+  profileGroup: {
+    backgroundColor: "#fff",
+    marginBottom: 8,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: 16,
+    paddingBottom: 4,
+  },
+  profileGroupTitle: {
+    fontSize: 13,
+    fontFamily: "NotoSerifBengali_700Bold",
+    color: COLORS.secondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  profileCardFull: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.outlineVariant,
+    overflow: "hidden",
+  },
+  profileRowItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+  },
+  iconBoxGray: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#f8fafc",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  rowContent: { flex: 1 },
+  rowLabel: {
+    fontSize: 11,
+    fontFamily: "NotoSerifBengali_400Regular",
+    color: COLORS.secondary,
+    marginBottom: 2,
+  },
+  rowValue: {
+    fontSize: 14,
+    fontFamily: "NotoSerifBengali_700Bold",
+    color: COLORS.onSurface,
+  },
+  // Profile Documents
+  docsRowFlat: { gap: 12, paddingBottom: 8 },
+  docItemFlat: { alignItems: "center", width: 100 },
+  realDocImg: { width: 100, height: 70, borderRadius: 10, resizeMode: "cover" },
+  docImgPlaceholder: { width: 100, height: 70, borderRadius: 10, backgroundColor: COLORS.surfaceContainerLowest },
+  docLabelFlat: { fontSize: 11, fontFamily: "NotoSerifBengali_400Regular", color: COLORS.secondary, marginTop: 6, textAlign: "center" },
+  logoutBtnProfile: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8, marginHorizontal: SPACING.lg, padding: 16, borderRadius: 14, backgroundColor: "#fef2f2", borderWidth: 1, borderColor: "#fee2e2" },
+  logoutTextProfile: { fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#ef4444" },
+  // Map Screen
+  mapContainer: { flex: 1, backgroundColor: "#f1f5f9" },
+  mapViewFull: { flex: 1 },
+  userLocationDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary + "30", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: COLORS.primary },
+  userLocationInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: COLORS.primary },
+  customMarkerContainer: { alignItems: "center" },
+  markerIconBox: { width: 44, height: 44, borderRadius: 22, justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#fff", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
+  markerDistanceBox: { backgroundColor: "#1e293b", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, marginTop: 4 },
+  markerDistanceText: { fontSize: 10, fontFamily: "NotoSerifBengali_700Bold", color: "#fff" },
+  mapSearchFloating: { position: "absolute", top: 60, left: 16, right: 16, backgroundColor: "#fff", borderRadius: 16, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 10, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 6 },
+  mapSearchText: { fontSize: 14, fontFamily: "NotoSerifBengali_400Regular", color: COLORS.secondary },
+  stationPopupContainer: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "#fff", borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingBottom: 34, shadowColor: "#000", shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10 },
+  popupHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#e2e8f0", alignSelf: "center", marginBottom: 16 },
+  popupHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 },
+  popupTitle: { fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: COLORS.onSurface, maxWidth: "70%" },
+  popupSubRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 },
+  popupAddress: { fontSize: 13, fontFamily: "NotoSerifBengali_400Regular", color: COLORS.secondary },
+  popupExpandBtn: { backgroundColor: COLORS.surfaceContainerLowest, padding: 8, borderRadius: 10 },
+  fuelStatusRow: { flexDirection: "row", gap: 10, marginBottom: 16 },
+  fuelStatusCard: { flex: 1, backgroundColor: "#f0fdf4", borderRadius: 12, padding: 10, alignItems: "center", borderWidth: 1, borderColor: "#bbf7d0" },
+  fuelStatusCardEmpty: { backgroundColor: "#fef2f2", borderColor: "#fecaca" },
+  fuelTypeName: { fontSize: 11, fontFamily: "NotoSerifBengali_700Bold", color: COLORS.secondary, marginBottom: 4 },
+  fuelStatusText: { fontSize: 12, fontFamily: "NotoSerifBengali_700Bold", color: "#059669" },
+  fuelStatusTextEmpty: { color: "#ef4444" },
+  directionsBtn: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8, backgroundColor: COLORS.primary, borderRadius: 16, paddingVertical: 14 },
+  directionsBtnText: { fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#fff" },
+  // QR Modal Compact
+  qrModalContentCompact: { backgroundColor: "#fff", borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingHorizontal: 24, paddingBottom: 40, paddingTop: 16, alignItems: "center" },
+  closeModalBtnMinimal: { alignSelf: "flex-end", padding: 8, borderRadius: 20, backgroundColor: COLORS.surfaceContainerLowest },
+  qrHeaderCompact: { alignItems: "center", marginBottom: 20 },
+  qrTitleCompact: { fontSize: 20, fontFamily: "NotoSerifBengali_700Bold", color: COLORS.onSurface },
+  qrSubTitleCompact: { fontSize: 13, fontFamily: "NotoSerifBengali_400Regular", color: COLORS.secondary, marginTop: 4 },
+  qrFrameCompact: { padding: 10, borderRadius: 20, backgroundColor: COLORS.primaryContainer + "20", marginBottom: 20 },
+  qrInnerCompact: { backgroundColor: "#fff", padding: 12, borderRadius: 14 },
+  qrVehicleCardCompact: { width: "100%", alignItems: "center", marginTop: 8 },
+  qrVehicleLabelCompact: { fontSize: 11, fontFamily: "NotoSerifBengali_400Regular", color: COLORS.secondary, marginBottom: 4 },
+  qrPlateCompact: { fontSize: 22, fontFamily: "NotoSerifBengali_700Bold", color: COLORS.onSurface },
+  qrVerifiedRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12, paddingVertical: 8, paddingHorizontal: 16, backgroundColor: "#f0fdf4", borderRadius: 12 },
+  qrVerifiedText: { fontSize: 13, fontFamily: "NotoSerifBengali_700Bold", color: "#059669" },
+  qrCloseButtonCompact: { width: "100%", alignItems: "center", paddingVertical: 14, backgroundColor: COLORS.primary, borderRadius: 16, marginTop: 16 },
+  qrCloseButtonText: { fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#fff" },
 });
