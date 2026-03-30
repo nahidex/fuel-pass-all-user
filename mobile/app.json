@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Fuel Pass",
+    "slug": "fuel-pass",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -21,6 +21,7 @@
       }
     },
     "android": {
+      "package": "com.nahidex.fuelpass",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -28,7 +29,8 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
@@ -52,6 +54,11 @@
           "cameraPermission": "The app needs access to your camera to let you take vehicle images."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ab85995b-3ef1-4441-934a-eae53935e881"
+      }
+    }
   }
 }
