@@ -603,6 +603,60 @@ async function startServer() {
     }
   });
 
+  // API to verify QR token (Operator side)
+  app.post("/api/verify-qr", async (req, res) => {
+    const { qrToken } = req.body;
+    if (!qrToken)
+      return res.status(400).json({ success: false, error: "কিউআর টোকেন নেই" });
+
+    try {
+      const decoded: any = jwt.verify(
+        qrToken,
+        process.env.JWT_SECRET || "secret",
+      );
+
+      if (mysqlPool) {
+        const [rows]: any = await mysqlPool.execute(
+          `
+          SELECT v.*, u.full_name, u.mobile_number 
+          FROM vehicles v 
+          JOIN users u ON v.user_id = u.id 
+          WHERE v.reg_number = ?
+        `,
+          [decoded.reg_number],
+        );
+
+        if (rows.length === 0) {
+          return res
+            .status(404)
+            .json({ success: true, error: "যানবাহন পাওয়া যায়নি" });
+        }
+
+        const vehicle = rows[0];
+        res.json({
+          success: true,
+          data: {
+            regNumber: vehicle.reg_number,
+            ownerName: vehicle.full_name,
+            fuelType: vehicle.fuel_type || "অকটেন",
+            status: "সফল",
+            remainingQuota: 25.5, // Dummy for now
+          },
+        });
+      } else {
+        res.status(500).json({ success: false, error: "ডেটাবেস সংযুক্ত নয়" });
+      }
+    } catch (error: any) {
+      console.error("QR Verification error:", error);
+      if (error.name === "TokenExpiredError") {
+        return res
+          .status(401)
+          .json({ success: false, error: "কিউআর কোডের মেয়াদ শেষ" });
+      }
+      res.status(401).json({ success: false, error: "অবৈধ কিউআর কোড" });
+    }
+  });
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
