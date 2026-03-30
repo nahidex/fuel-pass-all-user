@@ -34,220 +34,126 @@ async function seed() {
       "quotas",
       "vehicles",
       "users",
+      "fuel_rates",
     ];
     for (const table of tables) {
       await pool.execute(`TRUNCATE TABLE ${table}`);
     }
     await pool.execute("SET FOREIGN_KEY_CHECKS = 1");
 
+    console.log("Seeding Fuel Rates...");
+    const fuelRates = [
+      ["octane", 135.00, 2.50, "up"],
+      ["petrol", 130.00, 0.00, "stable"],
+      ["diesel", 106.00, -1.00, "down"],
+    ];
+    for (const rate of fuelRates) {
+      await pool.execute(
+        "INSERT INTO fuel_rates (fuel_type, price, change_amount, trend) VALUES (?, ?, ?, ?)",
+        rate,
+      );
+    }
+
     const hashedPassword = await bcrypt.hash("password", 10);
 
-    console.log("Seeding Users...");
-    const users = [
+    console.log("Seeding 40 Users...");
+    const baseUsers = [
       ["নাহিদ ওনার", "01700000000", "owner@test.com", hashedPassword, "owner"],
-      [
-        "রহিম অপারেটর",
-        "01700000001",
-        "op1@pump.com",
-        hashedPassword,
-        "operator",
-      ],
-      [
-        "করিম অপারেটর",
-        "01700000002",
-        "op2@pump.com",
-        hashedPassword,
-        "operator",
-      ],
-      [
-        "জাহিদ ডিস্ট্রিবিউটর",
-        "01700000005",
-        "dist@depot.com",
-        hashedPassword,
-        "distributor",
-      ],
+      ["রহিম অপারেটর", "01700000001", "op1@pump.com", hashedPassword, "operator"],
+      ["করিম অপারেটর", "01700000002", "op2@pump.com", hashedPassword, "operator"],
+      ["জাহিদ ডিস্ট্রিবিউটর", "01700000005", "dist@depot.com", hashedPassword, "distributor"],
       ["সালাম ওনার", "01700000003", "owner2@test.com", hashedPassword, "owner"],
     ];
 
-    for (const u of users) {
+    // Generate 35 more users to make it 40
+    for (let i = 6; i <= 40; i++) {
+      const role = i % 3 === 0 ? "operator" : i % 7 === 0 ? "distributor" : "owner";
+      const phone = `017${i.toString().padStart(8, "0")}`;
+      baseUsers.push([`User ${i}`, phone, `user${i}@test.com`, hashedPassword, role]);
+    }
+
+    for (const u of baseUsers) {
       await pool.execute(
         "INSERT INTO users (full_name, mobile_number, email, password, role) VALUES (?, ?, ?, ?, ?)",
         u,
       );
     }
 
-    const [[owner1]]: any = await pool.execute(
-      "SELECT id FROM users WHERE mobile_number = '01700000000'",
-    );
-    const [[owner2]]: any = await pool.execute(
-      "SELECT id FROM users WHERE mobile_number = '01700000003'",
-    );
-    const [[op1]]: any = await pool.execute(
-      "SELECT id FROM users WHERE mobile_number = '01700000001'",
-    );
-    const [[dist1]]: any = await pool.execute(
-      "SELECT id FROM users WHERE mobile_number = '01700000005'",
-    );
+    const [[owner1]]: any = await pool.execute("SELECT id FROM users WHERE mobile_number = '01700000000'");
+    const [[owner2]]: any = await pool.execute("SELECT id FROM users WHERE mobile_number = '01700000003'");
+    
+    // Get all owner IDs for vehicle distribution
+    const [allOwners]: any = await pool.execute("SELECT id FROM users WHERE role = 'owner'");
 
-    console.log("Seeding Vehicles & Quotas...");
-    const vehicles = [
-      [
-        owner1.id,
-        "Dhaka Metro-GA-1234",
-        "car",
-        "octane",
-        "Toyota Premio",
-        "Silver",
-        "ENG123",
-        "ঢাকা মেট্রো",
-        "গ",
-      ],
-      [
-        owner1.id,
-        "Dhaka Metro-LA-5678",
-        "bike",
-        "petrol",
-        "Honda Hornet",
-        "Red",
-        "ENG456",
-        "ঢাকা মেট্রো",
-        "ল",
-      ],
-      [
-        owner2.id,
-        "Ctg Metro-TA-9012",
-        "truck",
-        "diesel",
-        "Tata LPT",
-        "Blue",
-        "ENG789",
-        "চট্টগ্রাম মেট্রো",
-        "ট",
-      ],
-      [
-        owner2.id,
-        "Dhaka Metro-CHA-3456",
-        "car",
-        "octane",
-        "Toyota Noah",
-        "White",
-        "ENG012",
-        "ঢাকা মেট্রো",
-        "চ",
-      ],
-      [
-        owner1.id,
-        "Rajshahi Metro-HA-6789",
-        "bike",
-        "petrol",
-        "Suzuki Gixxer",
-        "Black",
-        "ENG345",
-        "রাজশাহী মেট্রো",
-        "হ",
-      ],
-    ];
+    console.log("Seeding 40 Vehicles & Quotas...");
+    const vehicleTypes = ["car", "bike", "truck"];
+    const fuelTypes = ["octane", "petrol", "diesel"];
+    const districts = ["ঢাকা মেট্রো", "চট্টগ্রাম মেট্রো", "রাজশাহী মেট্রো", "সিলেট মেট্রো"];
+    const seriesList = ["গ", "ল", "ট", "চ", "হ", "খ", "ম"];
 
-    for (const v of vehicles) {
-      const [vResult]: any = await pool.execute(
-        "INSERT INTO vehicles (user_id, reg_number, type, fuel_type, model, color, engine_number, district, series, uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [...v, uuidv4()],
-      );
-      await pool.execute(
-        "INSERT INTO quotas (vehicle_id, weekly_limit_liters) VALUES (?, ?)",
-        [vResult.insertId, v[2] === "truck" ? 100 : v[2] === "car" ? 40 : 15],
-      );
+    for (let i = 1; i <= 40; i++) {
+        const type = vehicleTypes[i % 3];
+        const fuel = fuelTypes[i % 3];
+        const owner = allOwners[i % allOwners.length];
+        const district = districts[i % districts.length];
+        const series = seriesList[i % seriesList.length];
+        const regNum = `${district}-${series}-${1000 + i}`;
+        
+        const [vResult]: any = await pool.execute(
+            "INSERT INTO vehicles (user_id, model_number, type, fuel_type, model, color, engine_number, district, series, uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [owner.id, regNum, type, fuel, `Model ${i}`, "Color", `ENG${1000+i}`, district, series, uuidv4()]
+        );
+        
+        await pool.execute(
+            "INSERT INTO quotas (vehicle_id, weekly_limit_liters) VALUES (?, ?)",
+            [vResult.insertId, type === "truck" ? 100 : type === "car" ? 40 : 15]
+        );
     }
 
-    console.log("Seeding Pumps & Inventories...");
-    const pumps = [
-      [
-        "পদ্মা ফিলিং স্টেশন",
-        "কারওয়ান বাজার, ঢাকা",
-        23.7512,
-        90.3934,
-        owner1.id,
-        "active",
-      ],
-      [
-        "মেঘনা পেট্রোলিয়াম",
-        "উত্তরা, ঢাকা",
-        23.8759,
-        90.3795,
-        owner1.id,
-        "active",
-      ],
-      [
-        "যমুনা ফিলিং সেন্টার",
-        "মতিঝিল, ঢাকা",
-        23.733,
-        90.4172,
-        owner1.id,
-        "active",
-      ],
-      ["শাপলা ফুয়েলস", "চট্টগ্রাম পোর্ট", 22.3167, 91.8, owner2.id, "active"],
-      [
-        "সোনারগাঁও স্টেশন",
-        "সাভার, ঢাকা",
-        23.8583,
-        90.2667,
-        owner2.id,
-        "active",
-      ],
-      [
-        "বিপিসি ফিলিং স্টেশন",
-        "বনানী, ঢাকা",
-        23.8103,
-        90.4125,
-        owner1.id,
-        "active",
-      ],
-      [
-        "ট্রাস্ট ফিলিং স্টেশন",
-        "মিরপুর, ঢাকা",
-        23.8203,
-        90.4225,
-        owner1.id,
-        "active",
-      ],
-    ];
-
-    for (const p of pumps) {
-      const [pResult]: any = await pool.execute(
-        "INSERT INTO pumps (name, location, latitude, longitude, owner_id, status) VALUES (?, ?, ?, ?, ?, ?)",
-        p,
-      );
-      await pool.execute(
-        "INSERT INTO inventories (pump_id, octane_liters, diesel_liters, petrol_liters) VALUES (?, ?, ?, ?)",
-        [pResult.insertId, 5000, 8000, 3000],
-      );
+    console.log("Seeding 40 Pumps...");
+    console.log("Seeding 40 Pumps & Inventories...");
+    for (let i = 1; i <= 40; i++) {
+        const owner = allOwners[i % allOwners.length];
+        const [pResult]: any = await pool.execute(
+            "INSERT INTO pumps (name, location, latitude, longitude, owner_id, status) VALUES (?, ?, ?, ?, ?, ?)",
+            [`পাম্প স্টেশন ${i}`, `লোকেশন ${i}`, 23.7 + (i * 0.01), 90.3 + (i * 0.01), owner.id, "active"]
+        );
+        await pool.execute(
+            "INSERT INTO inventories (pump_id, octane_liters, diesel_liters, petrol_liters) VALUES (?, ?, ?, ?)",
+            [pResult.insertId, 10000 + (i * 100), 15000 + (i * 100), 5000 + (i * 100)]
+        );
     }
 
     const [[pump1]]: any = await pool.execute("SELECT id FROM pumps LIMIT 1");
     const [[veh1]]: any = await pool.execute("SELECT id FROM vehicles LIMIT 1");
+    const [[op1]]: any = await pool.execute("SELECT id FROM users WHERE role = 'operator' LIMIT 1");
+    const [[dist1]]: any = await pool.execute("SELECT id FROM users WHERE role = 'distributor' LIMIT 1");
 
-    console.log("Seeding Transactions & Logs...");
-    // 5 Transactions
-    for (let i = 1; i <= 5; i++) {
+    console.log("Seeding 40 Transactions & Logs...");
+    // 40 Transactions
+    for (let i = 1; i <= 40; i++) {
+      const [[v]]: any = await pool.execute("SELECT id, fuel_type FROM vehicles ORDER BY RAND() LIMIT 1");
+      const [[p]]: any = await pool.execute("SELECT id FROM pumps ORDER BY RAND() LIMIT 1");
       await pool.execute(
         "INSERT INTO fuel_transactions (vehicle_id, pump_id, operator_id, fuel_type, amount_liters, price_total) VALUES (?, ?, ?, ?, ?, ?)",
-        [veh1.id, pump1.id, op1.id, "octane", 5 * i, 135 * 5 * i],
+        [v.id, p.id, op1.id, v.fuel_type, 5 + (i % 10), 135 * (5 + (i % 10))],
       );
     }
 
-    // 5 Supply Logs (Distributor to Pump)
-    for (let i = 1; i <= 5; i++) {
+    // 40 Supply Logs (Distributor to Pump)
+    for (let i = 1; i <= 40; i++) {
+      const [[p]]: any = await pool.execute("SELECT id FROM pumps ORDER BY RAND() LIMIT 1");
       await pool.execute(
         "INSERT INTO supply_logs (pump_id, distributor_id, fuel_type, amount_liters) VALUES (?, ?, ?, ?)",
-        [pump1.id, dist1.id, "diesel", 1000 * i],
+        [p.id, dist1.id, "octane", 5000],
       );
     }
 
-    // 5 Distribution Records (Depot to Distributor)
-    for (let i = 1; i <= 5; i++) {
+    // 40 Distribution Records (Depot to Distributor)
+    for (let i = 1; i <= 40; i++) {
       await pool.execute(
         "INSERT INTO distribution_records (distributor_id, depot_name, fuel_type, amount_liters) VALUES (?, ?, ?, ?)",
-        [dist1.id, "Fatullah Depot", "octane", 5000 * i],
+        [dist1.id, `Depot ${i}`, "octane", 5000 * i],
       );
     }
 

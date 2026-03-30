@@ -1,0 +1,79 @@
+  app.post("/api/register-vehicle", async (req, res) => {
+    const {
+      fullName,
+      mobileNumber,
+      email,
+      password,
+      district,
+      series,
+      number,
+      type,
+      model,
+      color,
+      engineNumber,
+    } = req.body;
+
+    try {
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      if (mysqlPool) {
+        // MySQL Registration
+        const connection = await mysqlPool.getConnection();
+        try {
+          await connection.beginTransaction();
+          const [userResult] = (await connection.execute(
+            `INSERT INTO users (full_name, mobile_number, email, password, role) VALUES (?, ?, ?, ?, 'owner')`,
+            [fullName, mobileNumber, email, hashedPassword],
+          )) as any;
+          const userId = userResult.insertId;
+
+          const vehicleUuid = crypto.randomUUID();
+          const [vResult]: any = await connection.execute(
+            `INSERT INTO vehicles (user_id, uuid, district, series, number, model_number, type, fuel_type, model, color, engine_number) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              userId,
+              vehicleUuid,
+              district,
+              series,
+              number,
+              `${district}-${series}-${number}`,
+              type,
+              type === "bike" ? "petrol" : "octane", // Default fuel type based on vehicle type
+              model,
+              color,
+              engineNumber,
+            ],
+          );
+
+          // Create default quota for new vehicle (30L weekly)
+          await connection.execute(
+            "INSERT INTO quotas (vehicle_id, weekly_limit_liters) VALUES (?, ?)",
+            [
+              vResult.insertId,
+              type === "truck" ? 100 : type === "car" ? 40 : 15,
+            ],
+          );
+
+          await connection.commit();
+          const token = jwt.sign(
+            { userId, mobileNumber },
+            process.env.JWT_SECRET || "secret",
+            { expiresIn: "7d" },
+          );
+
+          res.json({ token, user: { id: userId, mobileNumber, fullName } });
+        } catch (error) {
+          await connection.rollback();
+          throw error;
+        } finally {
+          connection.release();
+        }
+      } else {
+        res.status(500).json({ message: "Database connection lost" });
+      }
+    } catch (error: any) {
+      console.error("Registration error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });

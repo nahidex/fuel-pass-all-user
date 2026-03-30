@@ -30,11 +30,24 @@ async function migrate() {
       "quotas",
       "vehicles",
       "users",
+      "fuel_rates",
     ];
     for (const table of tables) {
       await pool.execute(`DROP TABLE IF EXISTS ${table}`);
     }
     await pool.execute("SET FOREIGN_KEY_CHECKS = 1");
+
+    console.log("0. Creating fuel_rates table...");
+    await pool.execute(`
+      CREATE TABLE fuel_rates (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        fuel_type ENUM('octane', 'petrol', 'diesel') UNIQUE NOT NULL,
+        price DECIMAL(10, 2) NOT NULL,
+        change_amount DECIMAL(10, 2) DEFAULT 0.00,
+        trend ENUM('up', 'down', 'stable') DEFAULT 'stable',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    `);
 
     console.log("1. Creating users table...");
     await pool.execute(`
@@ -54,7 +67,7 @@ async function migrate() {
       CREATE TABLE vehicles (
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
-        reg_number VARCHAR(100) NOT NULL,
+        model_number VARCHAR(100) NOT NULL,
         type VARCHAR(50) NOT NULL,
         fuel_type VARCHAR(50) NOT NULL,
         model VARCHAR(100),

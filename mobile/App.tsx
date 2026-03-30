@@ -18,7 +18,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { Picker } from "@react-native-picker/picker";
 import { StatusBar } from "expo-status-bar";
 import * as ImagePicker from "expo-image-picker";
-import { Camera, CameraView, BarcodeScanningResult } from "expo-camera";
+import { CameraView, BarcodeScanningResult, Camera as CameraModule } from "expo-camera";
 import axios from "axios";
 // Web-compatible Map using simple View and Markers for simulation
 const MapView = (props: any) => (
@@ -85,7 +85,7 @@ import {
   Palette,
   Settings,
   ShieldCheck,
-  CheckCircle2,
+  CircleCheck as CheckCircle2,
   Camera as CameraIcon,
   FileText,
   Check,
@@ -127,21 +127,17 @@ type Screen =
   | "transactions"
   | "profile"
   | "notifications"
+  | "verification_result"
+  | "transaction_success"
   | "map";
 
-const API_URL = "http://192.168.9.90:3000";
+const API_URL = "http://192.168.1.11:3000";
 
 const getFullUrl = (path: string | null) => {
   if (!path) return "";
   if (path.startsWith("http")) return path;
   return `${API_URL}${path}`;
 };
-
-const FUEL_RATES = [
-  { type: "অকটেন", price: "১৩৫.০০", change: "+২.৫০", trend: "up" },
-  { type: "পেট্রোল", price: "১৩০.০০", change: "০.০০", trend: "stable" },
-  { type: "ডিজেল", price: "১০৬.০০", change: "-১.০০", trend: "down" },
-];
 
 const TRANSACTIONS = [
   {
@@ -210,8 +206,54 @@ export default function App() {
   const [showPassword, setShowPassword] = React.useState(false);
   const [showQR, setShowQR] = React.useState(false);
   const [qrToken, setQrToken] = React.useState<string | null>(null);
+  const [verificationData, setVerificationData] = React.useState<any>(null);
+  const [lastTransaction, setLastTransaction] = React.useState<any>(null);
+  const [currentOperatorId, setCurrentOperatorId] = React.useState<number | null>(null);
+  const [fuelAmount, setFuelAmount] = React.useState("");
+  const [inputMode, setInputMode] = React.useState<"liter" | "taka">("liter");
+  const [fuelRates, setFuelRates] = React.useState<any[]>([
+    { fuel_type: "octane", price: "১৩৫.০০", change_amount: "+২.৫০", trend: "up" },
+    { fuel_type: "petrol", price: "১৩০.০০", change_amount: "০.০০", trend: "stable" },
+    { fuel_type: "diesel", price: "১০৬.০০", change_amount: "-১.০০", trend: "down" },
+  ]);
+  const [recentTransactions, setRecentTransactions] = React.useState<any[]>(
+    TRANSACTIONS,
+  );
   const [timeLeft, setTimeLeft] = React.useState(60); // 1 minute countdown
   const timerRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  const fetchFuelRates = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/fuel-prices`);
+      if (response.data.success) {
+        setFuelRates(response.data.prices);
+      }
+    } catch (error) {
+      console.error("Error fetching fuel rates:", error);
+    }
+  };
+
+  const fetchTransactions = async () => {
+    try {
+      const token = await AsyncStorage.getItem("fuelpass_token");
+      if (!token) return;
+
+      const response = await axios.get(`${API_URL}/api/transactions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.data.success && response.data.transactions.length > 0) {
+        setRecentTransactions(response.data.transactions);
+      }
+    } catch (error) {
+      console.error("Error fetching transactions:", error);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchFuelRates();
+    fetchTransactions();
+  }, [screen]);
 
   const fetchQRData = async () => {
     try {
@@ -334,6 +376,8 @@ export default function App() {
 
   const [fullName, setFullName] = React.useState("");
   const [email, setEmail] = React.useState("");
+  const [modelName, setModelName] = React.useState("");
+  const [color, setColor] = React.useState("");
   const [district, setDistrict] = React.useState("ঢাকা মেট্রো");
   const [series, setSeries] = React.useState("ক");
   const [number, setNumber] = React.useState("");
@@ -409,7 +453,7 @@ export default function App() {
   }, [screen]);
 
   const requestCameraPermission = async () => {
-    const { status } = await Camera.requestCameraPermissionsAsync();
+    const { status } = await CameraModule.requestCameraPermissionsAsync();
     setHasPermission(status === "granted");
     if (status !== "granted") {
       Alert.alert(
@@ -421,14 +465,38 @@ export default function App() {
     }
   };
 
+  const verifyScannedQR = async (token: string) => {
+    setLoading(true);
+    try {
+      console.log("Verifying QR token with API...");
+      const response = await axios.post(`${API_URL}/api/verify-qr`, {
+        qrToken: token,
+      });
+
+      if (response.data.success) {
+        setVerificationData(response.data.data);
+        setFuelAmount(""); // Reset fuel amount
+        setScreen("verification_result");
+      } else {
+        Alert.alert("Error", response.data.error || "ভেরিফিকেশন ব্যর্থ হয়েছে।");
+      }
+    } catch (error: any) {
+      console.error("Verification error:", error);
+      const errorMsg =
+        error.response?.data?.error || "সার্ভারের সাথে যোগাযোগ করা যাচ্ছে না।";
+      Alert.alert("ত্রুটি", errorMsg);
+    } finally {
+      setLoading(false);
+      setScanned(false);
+    }
+  };
+
   const handleBarCodeScanned = ({ data }: BarcodeScanningResult) => {
     setScanned(true);
     setIsScanning(false);
 
-    // Here logic for the scanned QR data
-    Alert.alert("QR কোড স্ক্যান হয়েছে", `ডেটা: ${data}`, [
-      { text: "ঠিক আছে", onPress: () => setScanned(false) },
-    ]);
+    // Verify the scanned token
+    verifyScannedQR(data);
   };
 
   // Image State
@@ -447,7 +515,7 @@ export default function App() {
             return;
           }
           let result = await ImagePicker.launchCameraAsync({
-            mediaTypes: ["images"],
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
             allowsEditing: true,
             aspect: type === "car" ? [16, 9] : [4, 3],
             quality: 0.7,
@@ -469,7 +537,7 @@ export default function App() {
             return;
           }
           let result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ["images"],
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
             allowsEditing: true,
             aspect: type === "car" ? [16, 9] : [4, 3],
             quality: 0.7,
@@ -492,32 +560,19 @@ export default function App() {
     }
     setLoading(true);
     try {
-      const response = await fetch(`${API_URL}/api/register-vehicle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fullName,
-          mobileNumber,
-          email,
-          district: district,
-          series: series,
-          number: number,
-          type: vehicleType,
-          model: "Toyota",
-          color: "White",
-          engineNumber: "123456",
-          reg_number: `${district}-${series}-${number}`,
-          fuel_type: vehicleType === "bike" ? "petrol" : "octane",
-          password,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok)
-        throw new Error(data.error || data.message || "Registration failed");
-
-      // Now upload images
+      // Create combined FormData
       const formData = new FormData();
+      formData.append("fullName", String(fullName));
+      formData.append("mobileNumber", String(mobileNumber));
+      formData.append("email", String(email));
+      formData.append("password", String(password));
+      formData.append("district", String(district));
+      formData.append("series", String(series));
+      formData.append("number", String(number));
+      formData.append("type", String(vehicleType));
+      formData.append("model", String(modelName || "Toyota"));
+      formData.append("color", String(color || "White"));
+      formData.append("engineNumber", "123456");
 
       const appendImage = (uri: string, name: string) => {
         if (!uri) return;
@@ -535,26 +590,23 @@ export default function App() {
       appendImage(plateImage, "plate");
       appendImage(bluebookImage, "bluebook");
 
-      const uploadResponse = await fetch(
-        `${API_URL}/api/upload-vehicle-images`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${data.token}`,
-            Accept: "application/json",
-          },
-          body: formData,
+      const response = await fetch(`${API_URL}/api/register-vehicle`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          // Don't set Content-Type, fetch will set multipart/form-data with boundary
         },
-      );
+        body: formData,
+      });
 
-      const uploadData = await uploadResponse.json();
-      if (uploadResponse.ok && uploadData.success) {
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.error || data.message || "Registration failed");
+
+      if (data.success) {
         setScreen("success");
       } else {
-        Alert.alert(
-          "আংশিক সফল",
-          "রেজিস্ট্রেশন হয়েছে কিন্তু ছবি আপলোড ব্যর্থ হয়েছে।",
-        );
+        Alert.alert("ত্রুটি", data.error || "রেজিস্ট্রেশন ব্যর্থ হয়েছে।");
       }
     } catch (err: any) {
       Alert.alert("ত্রুটি", err.message || "সার্ভারের সাথে সংযোগ বিচ্ছিন্ন");
@@ -585,12 +637,17 @@ export default function App() {
           setEmail(data.user.email || "");
           setVehicleType(data.user.type || "car");
           setDistrict(data.user.district || "ঢাকা মেট্রো");
+          setModelName(data.user.model || "");
+          setColor(data.user.color || "");
           setSeries(data.user.series || "ক");
           setNumber(data.user.regNumber || "");
           setCarImage(data.user.carImageUrl || null);
           setPlateImage(data.user.plateImageUrl || null);
           setBluebookImage(data.user.bluebookImageUrl || null);
           setUserRoleActual(data.user.role || "owner");
+          if (data.user.role === 'operator') {
+            setCurrentOperatorId(data.user.id);
+          }
         }
         setScreen("dashboard");
       } else {
@@ -603,18 +660,369 @@ export default function App() {
     }
   };
 
+  const renderTransactionSuccess = () => (
+    <SafeAreaView style={styles.operatorContainer}>
+      <StatusBar style="dark" />
+      <View style={[styles.operatorHeader, { borderBottomWidth: 0 }]}>
+        <TouchableOpacity
+          onPress={() => setScreen("dashboard")}
+          style={styles.opHeaderBtn}
+        >
+          <ArrowLeft size={24} color={COLORS.primary} />
+        </TouchableOpacity>
+        <Text style={[styles.opHeaderText, { flex: 1, textAlign: "center", marginRight: 40 }]}>
+          লেনদেন সম্পন্ন
+        </Text>
+      </View>
+
+      <ScrollView contentContainerStyle={{ padding: 20, alignItems: "center" }} showsVerticalScrollIndicator={false}>
+        {/* Success Icon */}
+        <View style={{ marginTop: 20, marginBottom: 20 }}>
+          <View style={{ width: 100, height: 100, borderRadius: 50, backgroundColor: "#065f46", justifyContent: "center", alignItems: "center" }}>
+            <Check size={60} color="#fff" />
+          </View>
+        </View>
+
+        <Text style={{ fontSize: 28, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46" }}>লেনদেন সফল হয়েছে</Text>
+        <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b", marginTop: 10 }}>
+          ট্রানজেকশন আইডি: #{lastTransaction?.id || "FP-992834"}
+        </Text>
+
+        {/* Info Card */}
+        <View style={{ width: "100%", backgroundColor: "#fff", borderRadius: 24, padding: 24, marginTop: 40, shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 10, elevation: 2 }}>
+          <View style={{ gap: 20 }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <Car size={20} color="#64748b" />
+                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>গাড়ির নম্বর</Text>
+              </View>
+              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{lastTransaction?.regNumber}</Text>
+            </View>
+
+            <View style={{ height: 1.5, backgroundColor: "#f8fafc" }} />
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <User size={20} color="#64748b" />
+                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>ইউজারের নাম</Text>
+              </View>
+              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{lastTransaction?.ownerName}</Text>
+            </View>
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <Fuel size={20} color="#64748b" />
+                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>তেলের ধরন</Text>
+              </View>
+              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{verificationData?.vehicleType === "bike" ? "পেট্রোল" : "অকটেন"}</Text>
+            </View>
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <ActivityIndicator size={20} color="#64748b" style={{ position: "absolute" }} />
+                <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: "#64748b", justifyContent: "center", alignItems: "center" }}>
+                   <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#64748b" }} />
+                </View>
+                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>পরিমাণ</Text>
+              </View>
+              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{lastTransaction?.amount} লিটার</Text>
+            </View>
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <CreditCard size={20} color="#64748b" />
+                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>পেমেন্ট পদ্ধতি</Text>
+              </View>
+              <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>নগদ (Cash)</Text>
+            </View>
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <History size={20} color="#64748b" />
+                <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>সময়</Text>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>৩০ মার্চ ২০২৬</Text>
+                <Text style={{ fontSize: 12, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>০৮:৪৫ রাত</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Total Cost Card */}
+        <View style={{ width: "100%", height: 110, backgroundColor: "#065f46", borderRadius: 20, marginTop: 24, overflow: "hidden", flexDirection: "row", padding: 24, alignItems: "center" }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, fontFamily: "NotoSerifBengali_400Regular" }}>মোট টাকা</Text>
+            <Text style={{ color: "#fff", fontSize: 36, fontFamily: "NotoSerifBengali_700Bold", marginTop: 4 }}>
+              {Math.round(parseFloat(lastTransaction?.amount || 0) * 135)} টাকা
+            </Text>
+          </View>
+          <View style={{ width: 64, height: 64, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.15)", justifyContent: "center", alignItems: "center" }}>
+             <CheckCircle2 color="#fff" size={32} />
+          </View>
+        </View>
+
+        {/* Buttons */}
+        <TouchableOpacity
+          onPress={() => setScreen("dashboard")}
+          style={{ width: "100%", height: 60, backgroundColor: "#065f46", borderRadius: 16, justifyContent: "center", alignItems: "center", marginTop: 30, flexDirection: "row", gap: 10 }}
+        >
+          <QrCode size={20} color="#fff" />
+          <Text style={{ color: "#fff", fontSize: 18, fontFamily: "NotoSerifBengali_700Bold" }}>পরবর্তী স্ক্যান</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => setScreen("dashboard")}
+          style={{ width: "100%", height: 60, backgroundColor: "#f1f5f9", borderRadius: 16, justifyContent: "center", alignItems: "center", marginTop: 15, flexDirection: "row", gap: 10 }}
+        >
+          <X size={20} color="#64748b" />
+          <Text style={{ color: "#64748b", fontSize: 18, fontFamily: "NotoSerifBengali_700Bold" }}>বন্ধ করুন</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+
+  const renderVerificationResult = () => (
+    <SafeAreaView style={styles.operatorContainer}>
+      <StatusBar style="dark" />
+      <View style={[styles.operatorHeader, { paddingTop: 40 }]}>
+        <View style={styles.opHeaderLeft}>
+          <TouchableOpacity
+            onPress={() => setScreen("dashboard")}
+            style={styles.opHeaderBtn}
+          >
+            <ArrowLeft size={24} color={COLORS.primary} />
+          </TouchableOpacity>
+          <Text style={styles.opHeaderText}>ভেরিফিকেশন রেজাল্ট</Text>
+        </View>
+        <View style={styles.opAvatarBtn}>
+          <Image
+            source={{
+              uri: "https://lh3.googleusercontent.com/aida-public/AB6AXuCzkU12np7ikmCIa0pawT7zWUi_7ZTIMgY477OGF1TOjcdzoKF-DjThZetMzWk5n0kmUWYndq_SBiN9GPYycv1wYDguk860mJxnx6jHw0Iu2al-LsTWdd0QIJS4NHAKbrHGi4xFxGquWkLTsALc40V-ZcgpF5WANrCV-yj1vu0KqViNkdW0zrhHqaqE2NT1c-x0VIdguqTN9jxpxVtSDf8ENZchGgJJtqP82EmSBwUYS5eV0KCVP8r87mzLESpwzX-n_mw7MS-sLv3o",
+            }}
+            style={styles.opAvatarImg}
+          />
+        </View>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[styles.opMainScroll, { gap: 20, paddingTop: 10 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Verification Status Banner */}
+        <View style={{ backgroundColor: "#ecfdf5", padding: 16, borderRadius: 16, borderLeftWidth: 4, borderLeftColor: "#10b981", marginBottom: 5 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <CheckCircle2 color="#059669" size={20} />
+            <Text style={{ fontSize: 18, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46" }}>ইউজার ভেরিফাইড</Text>
+          </View>
+          <Text style={{ fontSize: 13, fontFamily: "NotoSerifBengali_400Regular", color: "#059669", marginTop: 2 }}>রেজিস্ট্রেশন ডাটার সাথে মিল পাওয়া গেছে</Text>
+        </View>
+
+        {/* Uploaded Photos Section */}
+        <View style={{ marginTop: 5 }}>
+          <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b", marginBottom: 12 }}>রেজিস্ট্রেশনের সময় আপলোড করা ছবি</Text>
+          
+          <View style={{ width: "100%", height: 180, backgroundColor: "#f1f5f9", borderRadius: 20, overflow: "hidden", marginBottom: 12, borderWidth: 1, borderColor: "#e2e8f0" }}>
+            <Image 
+              source={{ uri: getFullUrl(verificationData?.carImageUrl) || "https://images.unsplash.com/photo-1540340334550-80151c0abc8c?w=100" }} 
+              style={{ width: "100%", height: "100%" }}
+              resizeMode="cover"
+            />
+            <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", padding: 8 }}>
+              <Text style={{ color: "#fff", fontSize: 12, fontFamily: "NotoSerifBengali_400Regular", textAlign: "center" }}>মোটরযান বা গাড়ির ছবি</Text>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: "row", gap: 12 }}>
+            <View style={{ flex: 1, height: 130, backgroundColor: "#f1f5f9", borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: "#e2e8f0" }}>
+              <Image 
+                source={{ uri: getFullUrl(verificationData?.plateImageUrl) || "https://images.unsplash.com/photo-1540340334550-80151c0abc8c?w=100" }} 
+                style={{ width: "100%", height: "100%" }}
+                resizeMode="cover"
+              />
+              <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", padding: 4 }}>
+                <Text style={{ color: "#fff", fontSize: 10, fontFamily: "NotoSerifBengali_400Regular", textAlign: "center" }}>প্লেট নম্বর</Text>
+              </View>
+            </View>
+
+            <View style={{ flex: 1, height: 130, backgroundColor: "#f1f5f9", borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: "#e2e8f0" }}>
+              <Image 
+                source={{ uri: getFullUrl(verificationData?.bluebookImageUrl) || "https://images.unsplash.com/photo-1540340334550-80151c0abc8c?w=100" }} 
+                style={{ width: "100%", height: "100%" }}
+                resizeMode="cover"
+              />
+              <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", padding: 4 }}>
+                <Text style={{ color: "#fff", fontSize: 10, fontFamily: "NotoSerifBengali_400Regular", textAlign: "center" }}>ব্লুবুক ছবি</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Owner Info Card */}
+        <View style={{ backgroundColor: "#fff", padding: 20, borderRadius: 20, borderWidth: 1, borderColor: "#f1f5f9" }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+            <View>
+              <Text style={{ fontSize: 24, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{verificationData?.ownerName || "গাড়ির মালিক"}</Text>
+              <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b", marginTop: 4 }}>
+                {verificationData?.vehicleType === "bike" ? "মোটরসাইকেল" : "কার/জিপ"} ট্রান্সপোর্টার
+              </Text>
+            </View>
+            <View style={{ backgroundColor: "#ecfdf5", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
+              <Text style={{ color: "#059669", fontFamily: "NotoSerifBengali_700Bold", fontSize: 13 }}>এক্টিভ পাস</Text>
+            </View>
+          </View>
+
+          <View style={{ height: 1.5, backgroundColor: "#f1f5f9", marginBottom: 20 }} />
+
+          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 14, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>আজকের অবশিষ্ট</Text>
+              <Text style={{ fontSize: 22, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46", marginTop: 6 }}>
+                {verificationData?.dailyRemaining || "০.০"} / {verificationData?.dailyLimit || "৫.০"} লিটার
+              </Text>
+            </View>
+            <View style={{ width: 20 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 14, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>মাসিক মোট কোটা</Text>
+              <Text style={{ fontSize: 22, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b", marginTop: 6 }}>
+                {verificationData?.monthlyUsage || "০"} / {verificationData?.monthlyLimit || "১০০"} লিটার
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Amount Input Mode Selector */}
+        <View style={{ marginTop: 10 }}>
+          <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b", marginBottom: 12 }}>ইনপুট মোড সিলেক্ট করুন</Text>
+          <View style={{ flexDirection: "row", gap: 10, backgroundColor: "#f1f5f9", padding: 6, borderRadius: 14 }}>
+            <TouchableOpacity 
+              onPress={() => { setInputMode("liter"); setFuelAmount(""); }}
+              style={{ flex: 1, height: 45, backgroundColor: inputMode === "liter" ? "#fff" : "transparent", borderRadius: 10, justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOpacity: inputMode === "liter" ? 0.05 : 0, shadowRadius: 5, elevation: inputMode === "liter" ? 2 : 0 }}
+            >
+              <Text style={{ color: inputMode === "liter" ? "#065f46" : "#64748b", fontFamily: "NotoSerifBengali_700Bold" }}>লিটার (Liter)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              onPress={() => { setInputMode("taka"); setFuelAmount(""); }}
+              style={{ flex: 1, height: 45, backgroundColor: inputMode === "taka" ? "#fff" : "transparent", borderRadius: 10, justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOpacity: inputMode === "taka" ? 0.05 : 0, shadowRadius: 5, elevation: inputMode === "taka" ? 2 : 0 }}
+            >
+              <Text style={{ color: inputMode === "taka" ? "#065f46" : "#64748b", fontFamily: "NotoSerifBengali_700Bold" }}>টাকা (Taka)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Input Section */}
+        <View style={{ alignItems: "center", marginTop: 20 }}>
+          <Text style={{ fontSize: 16, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b" }}>
+            {inputMode === "liter" ? "তেল প্রদানের পরিমাণ (লিটার)" : "তেল প্রদানের পরিমাণ (টাকা)"}
+          </Text>
+          <View style={{ width: "100%", alignItems: "center", borderBottomWidth: 3, borderBottomColor: "#1e293b", paddingVertical: 10, marginTop: 5, flexDirection: "row", justifyContent: "center" }}>
+             <Text style={{ fontSize: 44, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46" }}>
+               {inputMode === "taka" ? "৳" : ""} {fuelAmount || "০০"}
+             </Text>
+             {inputMode === "liter" && <Text style={{ fontSize: 20, fontFamily: "NotoSerifBengali_700Bold", color: "#065f46", marginLeft: 8, marginTop: 15 }}>লিটার</Text>}
+          </View>
+          {inputMode === "taka" && fuelAmount ? (
+            <Text style={{ marginTop: 8, color: "#059669", fontFamily: "NotoSerifBengali_400Regular" }}>
+              আনুমানিক: {(parseFloat(fuelAmount) / 135).toFixed(2)} লিটার
+            </Text>
+          ) : null}
+        </View>
+
+        {/* Keypad */}
+        <View style={{ gap: 10 }}>
+          {[["১", "২", "৩"], ["৪", "৫", "৬"], ["৭", "৮", "৯"], [".", "০", "del"]].map((row, i) => (
+            <View key={i} style={{ flexDirection: "row", gap: 10 }}>
+              {row.map((key) => (
+                <TouchableOpacity
+                  key={key}
+                  onPress={() => {
+                    if (key === "del") {
+                      setFuelAmount(prev => prev.slice(0, -1));
+                    } else if (fuelAmount.length < 5) {
+                      setFuelAmount(prev => prev + key);
+                    }
+                  }}
+                  style={{ flex: 1, height: 60, backgroundColor: "#fff", borderRadius: 12, justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 5, elevation: 1 }}
+                >
+                  {key === "del" ? (
+                    <X size={24} color="#1e293b" />
+                  ) : (
+                    <Text style={{ fontSize: 24, fontFamily: "NotoSerifBengali_700Bold", color: "#1e293b" }}>{key}</Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          ))}
+        </View>
+
+        {/* Payment Methods */}
+        <View style={{ marginTop: 10 }}>
+          <Text style={{ fontSize: 14, fontFamily: "NotoSerifBengali_400Regular", color: "#64748b", marginBottom: 12 }}>পেমেন্ট মেথড</Text>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+             <TouchableOpacity style={{ flex: 1, height: 50, backgroundColor: "#fff", borderRadius: 10, justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#f1f5f9" }}>
+               <Text style={{ fontFamily: "NotoSerifBengali_700Bold", fontSize: 16 }}>নগদ (Cash)</Text>
+             </TouchableOpacity>
+             <TouchableOpacity style={{ flex: 1, height: 50, backgroundColor: "#f1f5f9", borderRadius: 10, justifyContent: "center", alignItems: "center" }}>
+               <Text style={{ fontFamily: "NotoSerifBengali_400Regular", fontSize: 16 }}>অন্যান্য</Text>
+             </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Action Button */}
+        <TouchableOpacity 
+          onPress={async () => {
+            const finalAmount = inputMode === "taka" 
+              ? (parseFloat(fuelAmount) / 135).toFixed(2) 
+              : fuelAmount;
+            
+            setLoading(true);
+            try {
+              const response = await axios.post(`${API_URL}/api/complete-transaction`, {
+                vehicleId: verificationData?.vehicleId,
+                pumpId: 1, // Hardcoded for operator
+                operatorId: currentOperatorId || 8,
+                fuelType: verificationData?.vehicleType === "bike" ? "petrol" : "octane",
+                amountLiters: finalAmount
+              });
+
+              if (response.data.success) {
+                setLastTransaction({
+                  id: response.data.transactionId,
+                  regNumber: verificationData?.regNumber,
+                  ownerName: verificationData?.ownerName,
+                  amount: finalAmount,
+                  date: "৩০ মার্চ ২০২৬",
+                  time: "০৮:৪৫ রাত"
+                });
+                setScreen("transaction_success");
+              } else {
+                Alert.alert("ত্রুটি", response.data.error || "লেনদেন সম্পন্ন করা সম্ভব হয়নি");
+              }
+            } catch (error: any) {
+              console.error("Transaction completion error:", error);
+              Alert.alert("ত্রুটি", error.response?.data?.error || "সার্ভার এরর");
+            } finally {
+              setLoading(false);
+            }
+          }}
+          disabled={!fuelAmount || loading}
+          style={{ height: 65, backgroundColor: "#065f46", borderRadius: 16, justifyContent: "center", alignItems: "center", marginTop: 20, opacity: fuelAmount && !loading ? 1 : 0.6 }}
+        >
+          {loading ? (
+             <ActivityIndicator color="#fff" />
+          ) : (
+             <Text style={{ color: "#fff", fontSize: 20, fontFamily: "NotoSerifBengali_700Bold" }}>তেল প্রদান সম্পন্ন করুন</Text>
+          )}
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+
   const renderOperatorDashboard = () => (
     <View style={styles.operatorContainer}>
       <StatusBar style="dark" />
       <View style={styles.operatorHeader}>
         <View style={styles.opHeaderLeft}>
-          <TouchableOpacity style={styles.opHeaderBtn}>
-            <Plus
-              size={24}
-              color={COLORS.primary}
-              style={{ transform: [{ rotate: "45deg" }] }}
-            />
-          </TouchableOpacity>
           <Text style={styles.opHeaderText}>অপারেটর ড্যাশবোর্ড</Text>
         </View>
         <TouchableOpacity
@@ -964,10 +1372,10 @@ export default function App() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.ratesScroll}
           >
-            {FUEL_RATES.map((rate, idx) => (
+            {fuelRates.map((rate, idx) => (
               <View key={idx} style={styles.rateCard}>
                 <View style={styles.rateHeader}>
-                  <Text style={styles.rateType}>{rate.type}</Text>
+                  <Text style={styles.rateType}>{rate.fuel_type === 'octane' ? 'অকটেন' : rate.fuel_type === 'petrol' ? 'পেট্রোল' : 'ডিজেল'}</Text>
                   {rate.trend === "up" ? (
                     <TrendingUp size={14} color="#ef4444" />
                   ) : rate.trend === "down" ? (
@@ -988,7 +1396,7 @@ export default function App() {
                     },
                   ]}
                 >
-                  {rate.change} / লিটার
+                  {rate.change_amount} / লিটার
                 </Text>
               </View>
             ))}
@@ -1074,7 +1482,7 @@ export default function App() {
               <Text style={styles.seeAllText}>সব দেখুন</Text>
             </TouchableOpacity>
           </View>
-          {TRANSACTIONS.map((tx) => (
+          {recentTransactions.slice(0, 3).map((tx) => (
             <TouchableOpacity key={tx.id} style={styles.txListItem}>
               <View style={styles.txIconBox}>
                 <History size={20} color={COLORS.primary} />
@@ -1181,8 +1589,8 @@ export default function App() {
           </LinearGradient>
         </View>
 
-        <Text style={styles.txGroupTitle}>মার্চ ২০২৪</Text>
-        {TRANSACTIONS.map((tx) => (
+        <Text style={styles.txGroupTitle}>সাম্প্রতিক লেনদেন</Text>
+        {recentTransactions.map((tx) => (
           <View key={tx.id} style={styles.txDetailCard}>
             <View style={styles.txDetailHeader}>
               <View style={styles.txDetailIconCircle}>
@@ -1818,6 +2226,31 @@ export default function App() {
                     </View>
                   </View>
 
+                  <View style={{ flexDirection: "row", gap: SPACING.m, marginTop: SPACING.m }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>মডেল (Model)</Text>
+                      <View style={styles.inputWrapper}>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Toyota Camry"
+                          value={modelName}
+                          onChangeText={setModelName}
+                        />
+                      </View>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>রং (Color)</Text>
+                      <View style={styles.inputWrapper}>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="White"
+                          value={color}
+                          onChangeText={setColor}
+                        />
+                      </View>
+                    </View>
+                  </View>
+
                   <View style={styles.inputGroup}>
                     <Text style={styles.label}>যানবাহনের ধরণ</Text>
                     <View style={styles.typeSelector}>
@@ -1930,7 +2363,7 @@ export default function App() {
                     ) : (
                       <View style={styles.uploadPlaceholder}>
                         <View style={styles.uploadIconCircle}>
-                          <Camera color={COLORS.primary} size={32} />
+                          <CameraIcon color={COLORS.primary} size={32} />
                         </View>
                         <View style={{ flex: 1, marginLeft: 16 }}>
                           <Text style={styles.uploadTitle}>গাড়ির ছবি</Text>
@@ -2254,6 +2687,8 @@ export default function App() {
         (userRoleActual === "operator"
           ? renderOperatorDashboard()
           : renderDashboard())}
+      {screen === "verification_result" && renderVerificationResult()}
+      {screen === "transaction_success" && renderTransactionSuccess()}
       {screen === "transactions" && renderTransactions()}
       {screen === "profile" && renderProfile()}
       {screen === "map" && renderMap()}
@@ -2424,32 +2859,29 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
   },
   opScannerStatus: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: COLORS.primary,
-    padding: 20,
+    padding: 24,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 12,
+    flexWrap: "wrap",
+    backgroundColor: COLORS.primary,
   },
   opPulseRow: {
     flexDirection: "row",
     gap: 6,
   },
   opPulseDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: "#fff",
   },
   opScannerStatusText: {
     color: "#fff",
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: "NotoSerifBengali_700Bold",
-    letterSpacing: 1,
+    textAlign: "center",
   },
   opInventoryCard: {
     backgroundColor: "#fff",
@@ -5494,13 +5926,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8fafc",
     borderWidth: 1.5,
     borderColor: "#e2e8f0",
-    borderStyle: "dashed",
   },
   realDocImg: {
     width: 140,
     height: 90,
     borderRadius: 16,
     backgroundColor: "#f1f5f9",
+    resizeMode: "cover",
   },
   docLabelFlat: {
     fontSize: 12,
